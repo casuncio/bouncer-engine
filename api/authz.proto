@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package authz.v1;
+
+option go_package = "github.com/casuncio/authz-engine/gen/v1;authzv1";
+
+service AuthorizationService {
+  rpc CheckAccess (CheckAccessRequest) returns (CheckAccessResponse);
+  rpc StreamPolicyUpdates (stream PolicyUpdateRequest) returns (PolicyUpdateResponse);
+}
+
+message CheckAccessRequest {
+  string principal_id = 1;                      // e.g., Username or service accessing resource
+  map<string, string> principal_attributes = 2; // e.g., roles="SecurityAdmin,Ops", dept="Infra"
+  string resource_type = 3;                     // e.g., audit-log, flight-telemetry-stream 
+  string resource_id = 4;                       // e.g., log-auth-20260812-0941, stream-f16-tlm-142
+  map<string, string> resource_attributes = 5;  // e.g., sensitivity="high", env="prod"
+  string action = 6;                            // e.g., READ, WRITE, DELETE
+  map<string, string> environment_attributes = 7;// e.g., ip_address="10.0.1.5", time="14:30"
+}
+
+message CheckAccessResponse {
+  bool allowed = 1;
+  string matched_policy_id = 2;
+  string reason = 3;
+  int64 evaluation_time_ns = 4;
+}
+
+message PolicyUpdateRequest {
+  string policy_id = 1;
+  string action = 2; // "UPSERT" or "DELETE"
+  string policy_json = 3;
+}
+
+message PolicyUpdateResponse {
+  bool success = 1;
+  int32 active_policy_count = 2;
+}

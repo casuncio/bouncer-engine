@@ -1,0 +1,26 @@
+{
+  "id": "pol-sec-ops-001",
+  "description": "Restrict Sensitive Resource Access Outside Business Hours",
+  "access": "ALLOW",
+  "target": {
+    "resource_type": "production-db-backup",
+    "action": "READ"
+  },
+  "conditions": [
+    {
+      "attribute": "principal.roles",
+      "operator": "CONTAINS",
+      "value": "SecurityAdmin"
+    },
+    {
+      "attribute": "environment.ip_address",
+      "operator": "IN_CIDR",
+      "value": "10.0.0.0/16"
+    },
+    {
+      "attribute": "environment.time_of_day",
+      "operator": "BETWEEN",
+      "value": ["08:00", "18:00"]
+    }
+  ]
+}
