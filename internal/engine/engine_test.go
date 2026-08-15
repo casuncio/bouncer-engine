@@ -45,13 +45,13 @@ func runTests(t *testing.T, tests []AccessTest, authzEngine *Engine) {
 	}
 }
 
-func TestEngine_equals(t *testing.T) {
+func TestEngine_Basic(t *testing.T) {
 	// Setup our mock store with one data protection policy for Equals
 	mockStore := &MockStore{
 		Policies: []store.Policy{
 			{
-				ID:          "perf-metrics-001",
-				Description: "Anyone can read performace metrics, while on internal VPN",
+				ID:          "basic-equals",
+				Description: "Basic Policy with just one condition for equals",
 				Access:      store.AccessAllow,
 				Target: store.Target{
 					ResourceType: "endpoint-metrics-log",
@@ -61,7 +61,55 @@ func TestEngine_equals(t *testing.T) {
 					{
 						Attribute: "environment.network_zone",
 						Operator:  "EQUALS",
-						Value:     []string{"internal-vpn"},
+						Value:     []string{"internal-data", "backup-mgmt"},
+					},
+				},
+			},
+			{
+				ID:          "basic-contains-all",
+				Description: "Basic Policy with just one condition for contains all",
+				Access:      store.AccessAllow,
+				Target: store.Target{
+					ResourceType: "audit-log",
+					Action:       "READ",
+				},
+				Conditions: []store.Condition{
+					{
+						Attribute: "principal.roles",
+						Operator:  "CONTAINS_ALL",
+						Value:     []string{"Admin"},
+					},
+				},
+			},
+			{
+				ID:          "basic-contains-all-multi",
+				Description: "Basic Policy with just one condition for contains all multi value",
+				Access:      store.AccessAllow,
+				Target: store.Target{
+					ResourceType: "backup-database",
+					Action:       "READ",
+				},
+				Conditions: []store.Condition{
+					{
+						Attribute: "resource.network_zone",
+						Operator:  "CONTAINS_ALL",
+						Value:     []string{"internal-data", "backup-mgmt"},
+					},
+				},
+			},
+			{
+				ID:          "basic-contains-any",
+				Description: "Basic Policy with just one condition for contains any",
+				Access:      store.AccessAllow,
+				Target: store.Target{
+					ResourceType: "internal-database",
+					Action:       "READ",
+				},
+				Conditions: []store.Condition{
+					{
+						Attribute: "resource.network_zone",
+						Operator:  "CONTAINS_ANY",
+						Value:     []string{"internal-data", "backup-mgmt"},
 					},
 				},
 			},
@@ -74,19 +122,79 @@ func TestEngine_equals(t *testing.T) {
 	// Test case
 	tests := []AccessTest{
 		{
-			name: "Basic Equals Test",
+			name: "Basic Equals Test 1",
 			request: EvaluationRequest{
 				ResourceType: "endpoint-metrics-log",
 				Action:       "READ",
-				PrincipalAttributes: map[string]string{
-					"roles": "DevOps",
+				PrincipalAttributes: map[string][]string{
+					"roles": {"DevOps", "Admin"},
 				},
-				EnvironmentAttributes: map[string]string{
-					"network_zone": "internal-vpn",
+				EnvironmentAttributes: map[string][]string{
+					"network_zone": {"internal-data", "backup-mgmt"},
 				},
 			},
 			expectAllowed: true,
-			expectPolicy:  "perf-metrics-001",
+			expectPolicy:  "basic-equals",
+		},
+		{
+			name: "Basic Equals Test 2",
+			request: EvaluationRequest{
+				ResourceType: "endpoint-metrics-log",
+				Action:       "READ",
+				PrincipalAttributes: map[string][]string{
+					"roles": {"DevOps", "Admin"},
+				},
+				EnvironmentAttributes: map[string][]string{
+					"network_zone": {"backup-mgmt", "internal-data"},
+				},
+			},
+			expectAllowed: true,
+			expectPolicy:  "basic-equals",
+		},
+		{
+			name: "Basic CONTAINS_ALL Test",
+			request: EvaluationRequest{
+				ResourceType: "audit-log",
+				Action:       "READ",
+				PrincipalAttributes: map[string][]string{
+					"roles": {"DevOps", "Admin"},
+				},
+				ResourceAttributes: map[string][]string{
+					"network_zone": {"internal-vpn"},
+				},
+			},
+			expectAllowed: true,
+			expectPolicy:  "basic-contains-all",
+		},
+		{
+			name: "Basic CONTAINS_ALL Multi Test",
+			request: EvaluationRequest{
+				ResourceType: "backup-database",
+				Action:       "READ",
+				PrincipalAttributes: map[string][]string{
+					"roles": {"DevOps", "Admin"},
+				},
+				ResourceAttributes: map[string][]string{
+					"network_zone": {"internal-data", "backup-mgmt", "internal-vpn"},
+				},
+			},
+			expectAllowed: true,
+			expectPolicy:  "basic-contains-all-multi",
+		},
+		{
+			name: "Basic CONTAINS_ANY Test",
+			request: EvaluationRequest{
+				ResourceType: "internal-database",
+				Action:       "READ",
+				PrincipalAttributes: map[string][]string{
+					"roles": {"DevOps", "Admin"},
+				},
+				ResourceAttributes: map[string][]string{
+					"network_zone": {"internal-data"},
+				},
+			},
+			expectAllowed: true,
+			expectPolicy:  "basic-contains-any",
 		},
 	}
 
@@ -109,7 +217,7 @@ func TestEngine_equals(t *testing.T) {
 // 				Conditions: []store.Condition{
 // 					// {
 // 					// 	Attribute: "principal.roles",
-// 					// 	Operator:  "CONTAINS",
+// 					// 	Operator:  "CONTAINS_ALL",
 // 					// 	Value:     []string{"SecurityAdmin"},
 // 					// },
 // 					{

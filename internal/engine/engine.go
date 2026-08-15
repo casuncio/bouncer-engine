@@ -16,12 +16,12 @@ type PolicyProvider interface {
 // EvaluationRequest represents an incoming Authorization check
 type EvaluationRequest struct {
 	PrincipalID           string
-	PrincipalAttributes   map[string]string
+	PrincipalAttributes   map[string][]string
 	ResourceType          string
 	ResourceID            string
-	ResourceAttributes    map[string]string
+	ResourceAttributes    map[string][]string
 	Action                string
-	EnvironmentAttributes map[string]string
+	EnvironmentAttributes map[string][]string
 }
 
 // EvaluationResponse represents descision returned to the client.
@@ -34,8 +34,8 @@ type EvaluationResponse struct {
 
 // FlattenAttributes merges all contextual attributes into a single map with
 // dot-notaton prefixes for keys, principal.<> resource.<> environment.<>
-func (req *EvaluationRequest) FlattenAttributes() map[string]string {
-	attrMap := make(map[string]string)
+func (req *EvaluationRequest) FlattenAttributes() map[string][]string {
+	attrMap := make(map[string][]string)
 
 	for k, v := range req.PrincipalAttributes {
 		attrMap[fmt.Sprintf("principal.%s", k)] = v

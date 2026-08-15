@@ -9,14 +9,18 @@ service AuthorizationService {
   rpc StreamPolicyUpdates (stream PolicyUpdateRequest) returns (PolicyUpdateResponse);
 }
 
+message AttributeList {
+  repeated string values = 1 
+}
+
 message CheckAccessRequest {
   string principal_id = 1;                      // e.g., Username or service accessing resource
-  map<string, string> principal_attributes = 2; // e.g., roles="SecurityAdmin,Ops", dept="Infra"
+  map<string, AttributeList> principal_attributes = 2; // e.g., roles="SecurityAdmin,Ops", dept="Infra"
   string resource_type = 3;                     // e.g., audit-log, flight-telemetry-stream 
   string resource_id = 4;                       // e.g., log-auth-20260812-0941, stream-f16-tlm-142
-  map<string, string> resource_attributes = 5;  // e.g., sensitivity="high", env="prod"
+  map<string, AttributeList> resource_attributes = 5;  // e.g., sensitivity="high", env="prod"
   string action = 6;                            // e.g., READ, WRITE, DELETE
-  map<string, string> environment_attributes = 7;// e.g., ip_address="10.0.1.5", time="14:30"
+  map<string, AttributeList> environment_attributes = 7;// e.g., ip_address="10.0.1.5", time="14:30"
 }
 
 message CheckAccessResponse {
