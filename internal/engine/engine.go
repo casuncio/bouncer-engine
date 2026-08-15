@@ -15,13 +15,13 @@ type PolicyProvider interface {
 
 // EvaluationRequest represents an incoming Authorization check
 type EvaluationRequest struct {
-	PrincipalID           string
-	PrincipalAttributes   map[string][]string
-	ResourceType          string
-	ResourceID            string
-	ResourceAttributes    map[string][]string
-	Action                string
-	EnvironmentAttributes map[string][]string
+	PrincipalID           string              `json:"principal_id"`
+	PrincipalAttributes   map[string][]string `json:"principal_attributes"`
+	ResourceType          string              `json:"resource_type"`
+	ResourceID            string              `json:"resource_id"`
+	ResourceAttributes    map[string][]string `json:"resource_attributes"`
+	Action                string              `json:"action"`
+	EnvironmentAttributes map[string][]string `json:"environment_attributes"`
 }
 
 // EvaluationResponse represents descision returned to the client.

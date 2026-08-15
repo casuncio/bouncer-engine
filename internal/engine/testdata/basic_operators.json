@@ -1,0 +1,167 @@
+[
+  {
+    "name": "Equals allow",
+    "policies": [
+      {
+        "id": "basic-equals",
+        "description": "Internal zones may read endpoint metrics",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "endpoint-metrics-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["internal-data", "backup-mgmt"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "endpoint-metrics-log",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["DevOps", "Admin"]
+      },
+      "environment_attributes": {
+        "network_zone": ["internal-data", "backup-mgmt"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-equals"
+  },
+  {
+    "name": "Equals allow, value order reversed",
+    "policies": [
+      {
+        "id": "basic-equals",
+        "description": "Internal zones may read endpoint metrics",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "endpoint-metrics-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["internal-data", "backup-mgmt"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "endpoint-metrics-log",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["DevOps", "Admin"]
+      },
+      "environment_attributes": {
+        "network_zone": ["backup-mgmt", "internal-data"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-equals"
+  },
+  {
+    "name": "CONTAINS_ALL single value",
+    "policies": [
+      {
+        "id": "basic-contains-all",
+        "description": "Admins may read audit logs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "audit-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.roles",
+            "operator": "CONTAINS_ALL",
+            "value": ["Admin"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "audit-log",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["DevOps", "Admin"]
+      },
+      "resource_attributes": {
+        "network_zone": ["internal-vpn"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-contains-all"
+  },
+  {
+    "name": "CONTAINS_ALL multi value",
+    "policies": [
+      {
+        "id": "basic-contains-all-multi",
+        "description": "Internal backup zones may read backups",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "backup-database",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "resource.network_zone",
+            "operator": "CONTAINS_ALL",
+            "value": ["internal-data", "backup-mgmt"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "backup-database",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["DevOps", "Admin"]
+      },
+      "resource_attributes": {
+        "network_zone": ["internal-data", "backup-mgmt", "internal-vpn"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-contains-all-multi"
+  },
+  {
+    "name": "CONTAINS_ANY overlapping value",
+    "policies": [
+      {
+        "id": "basic-contains-any",
+        "description": "Internal zones may read internal databases",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "internal-database",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "resource.network_zone",
+            "operator": "CONTAINS_ANY",
+            "value": ["internal-data", "backup-mgmt"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "internal-database",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["DevOps", "Admin"]
+      },
+      "resource_attributes": {
+        "network_zone": ["internal-data"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-contains-any"
+  }
+]

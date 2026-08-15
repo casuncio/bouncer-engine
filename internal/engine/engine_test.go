@@ -2,286 +2,116 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/casuncio/bouncer-engine/internal/store"
 )
 
-// MockStore implements PolicyProvider for testing.
-type MockStore struct {
-	Policies []store.Policy
+// mockStore implements PolicyProvider for testing.
+type mockStore struct {
+	policies []store.Policy
 }
 
-func (m *MockStore) ListActivePolicies(ctx context.Context) ([]store.Policy, error) {
-	return m.Policies, nil
+func (m *mockStore) ListActivePolicies(ctx context.Context) ([]store.Policy, error) {
+	return m.policies, nil
 }
 
-type AccessTest struct {
-	name          string
-	request       EvaluationRequest
-	expectAllowed bool
-	expectPolicy  string
+// checkFunc is an injectable evaluation function so a table of cases can be
+// run against any engine implementation (e.g. middleware wrapping CheckAccess).
+type checkFunc func(ctx context.Context, req *EvaluationRequest) (*EvaluationResponse, error)
+
+// testCase describes a single authorization scenario. The json tags let the
+// same struct be fed from testdata files; Check is never decoded.
+type testCase struct {
+	Name         string            `json:"name"`
+	Policies     []store.Policy    `json:"policies"`
+	Request      EvaluationRequest `json:"request"`
+	WantAllowed  bool              `json:"want_allowed"`
+	WantPolicyID string            `json:"want_policy_id"`
+	WantErr      bool              `json:"want_err,omitempty"`
+	WantReason   string            `json:"want_reason,omitempty"`
+	Check        checkFunc         `json:"-"`
 }
 
-func runTests(t *testing.T, tests []AccessTest, authzEngine *Engine) {
-
-	// Execute tests
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := authzEngine.CheckAccess(context.Background(), &tt.request)
-
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-
-			if resp.Allowed != tt.expectAllowed {
-				t.Errorf("Expected Allowed to be %v, got %v", tt.expectAllowed, resp.Allowed)
-			}
-
-			if resp.MatchedPolicyID != tt.expectPolicy {
-				t.Errorf("Expected PolicyID '%s', got '%s'", tt.expectPolicy, resp.MatchedPolicyID)
-			}
+// runTestCases executes each case as a subtest, spinning up a fresh engine
+// per case so policies never leak between scenarios.
+func runTestCases(t *testing.T, cases []testCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			runTestCase(t, tc)
 		})
 	}
 }
 
-func TestEngine_Basic(t *testing.T) {
-	// Setup our mock store with one data protection policy for Equals
-	mockStore := &MockStore{
-		Policies: []store.Policy{
-			{
-				ID:          "basic-equals",
-				Description: "Basic Policy with just one condition for equals",
-				Access:      store.AccessAllow,
-				Target: store.Target{
-					ResourceType: "endpoint-metrics-log",
-					Action:       "READ",
-				},
-				Conditions: []store.Condition{
-					{
-						Attribute: "environment.network_zone",
-						Operator:  "EQUALS",
-						Value:     []string{"internal-data", "backup-mgmt"},
-					},
-				},
-			},
-			{
-				ID:          "basic-contains-all",
-				Description: "Basic Policy with just one condition for contains all",
-				Access:      store.AccessAllow,
-				Target: store.Target{
-					ResourceType: "audit-log",
-					Action:       "READ",
-				},
-				Conditions: []store.Condition{
-					{
-						Attribute: "principal.roles",
-						Operator:  "CONTAINS_ALL",
-						Value:     []string{"Admin"},
-					},
-				},
-			},
-			{
-				ID:          "basic-contains-all-multi",
-				Description: "Basic Policy with just one condition for contains all multi value",
-				Access:      store.AccessAllow,
-				Target: store.Target{
-					ResourceType: "backup-database",
-					Action:       "READ",
-				},
-				Conditions: []store.Condition{
-					{
-						Attribute: "resource.network_zone",
-						Operator:  "CONTAINS_ALL",
-						Value:     []string{"internal-data", "backup-mgmt"},
-					},
-				},
-			},
-			{
-				ID:          "basic-contains-any",
-				Description: "Basic Policy with just one condition for contains any",
-				Access:      store.AccessAllow,
-				Target: store.Target{
-					ResourceType: "internal-database",
-					Action:       "READ",
-				},
-				Conditions: []store.Condition{
-					{
-						Attribute: "resource.network_zone",
-						Operator:  "CONTAINS_ANY",
-						Value:     []string{"internal-data", "backup-mgmt"},
-					},
-				},
-			},
-		},
+// runTestCase runs a single test case against a fresh engine.
+func runTestCase(t *testing.T, tc testCase) {
+	t.Helper()
+
+	check := tc.Check
+	if check == nil {
+		engine := New(&mockStore{policies: tc.Policies})
+		check = engine.CheckAccess
 	}
 
-	// Initialize the engine with the mock store
-	authzEngine := New(mockStore)
-
-	// Test case
-	tests := []AccessTest{
-		{
-			name: "Basic Equals Test 1",
-			request: EvaluationRequest{
-				ResourceType: "endpoint-metrics-log",
-				Action:       "READ",
-				PrincipalAttributes: map[string][]string{
-					"roles": {"DevOps", "Admin"},
-				},
-				EnvironmentAttributes: map[string][]string{
-					"network_zone": {"internal-data", "backup-mgmt"},
-				},
-			},
-			expectAllowed: true,
-			expectPolicy:  "basic-equals",
-		},
-		{
-			name: "Basic Equals Test 2",
-			request: EvaluationRequest{
-				ResourceType: "endpoint-metrics-log",
-				Action:       "READ",
-				PrincipalAttributes: map[string][]string{
-					"roles": {"DevOps", "Admin"},
-				},
-				EnvironmentAttributes: map[string][]string{
-					"network_zone": {"backup-mgmt", "internal-data"},
-				},
-			},
-			expectAllowed: true,
-			expectPolicy:  "basic-equals",
-		},
-		{
-			name: "Basic CONTAINS_ALL Test",
-			request: EvaluationRequest{
-				ResourceType: "audit-log",
-				Action:       "READ",
-				PrincipalAttributes: map[string][]string{
-					"roles": {"DevOps", "Admin"},
-				},
-				ResourceAttributes: map[string][]string{
-					"network_zone": {"internal-vpn"},
-				},
-			},
-			expectAllowed: true,
-			expectPolicy:  "basic-contains-all",
-		},
-		{
-			name: "Basic CONTAINS_ALL Multi Test",
-			request: EvaluationRequest{
-				ResourceType: "backup-database",
-				Action:       "READ",
-				PrincipalAttributes: map[string][]string{
-					"roles": {"DevOps", "Admin"},
-				},
-				ResourceAttributes: map[string][]string{
-					"network_zone": {"internal-data", "backup-mgmt", "internal-vpn"},
-				},
-			},
-			expectAllowed: true,
-			expectPolicy:  "basic-contains-all-multi",
-		},
-		{
-			name: "Basic CONTAINS_ANY Test",
-			request: EvaluationRequest{
-				ResourceType: "internal-database",
-				Action:       "READ",
-				PrincipalAttributes: map[string][]string{
-					"roles": {"DevOps", "Admin"},
-				},
-				ResourceAttributes: map[string][]string{
-					"network_zone": {"internal-data"},
-				},
-			},
-			expectAllowed: true,
-			expectPolicy:  "basic-contains-any",
-		},
+	resp, err := check(context.Background(), &tc.Request)
+	if tc.WantErr {
+		if err == nil {
+			t.Fatalf("expected an error, got nil")
+		}
+		return
 	}
-
-	runTests(t, tests, authzEngine)
-
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Allowed != tc.WantAllowed {
+		t.Errorf("Allowed = %v, want %v", resp.Allowed, tc.WantAllowed)
+	}
+	if resp.MatchedPolicyID != tc.WantPolicyID {
+		t.Errorf("MatchedPolicyID = %q, want %q", resp.MatchedPolicyID, tc.WantPolicyID)
+	}
+	if tc.WantReason != "" && resp.Reason != tc.WantReason {
+		t.Errorf("Reason = %q, want %q", resp.Reason, tc.WantReason)
+	}
 }
 
-// func TestEngine_CheckAccess(t *testing.T) {
-// 	// Setup our mock store with one strict data protection policy
-// 	mockStore := &MockStore{
-// 		Policies: []store.Policy{
-// 			{
-// 				ID:          "pol-threat-001",
-// 				Description: "Security Admins can read endpoint threat logs",
-// 				Access:      store.AccessAllow,
-// 				Target: store.Target{
-// 					ResourceType: "endpoint-threat-log",
-// 					Action:       "READ",
-// 				},
-// 				Conditions: []store.Condition{
-// 					// {
-// 					// 	Attribute: "principal.roles",
-// 					// 	Operator:  "CONTAINS_ALL",
-// 					// 	Value:     []string{"SecurityAdmin"},
-// 					// },
-// 					{
-// 						Attribute: "environment.network_zone",
-// 						Operator:  "EQUALS",
-// 						Value:     []string{"internal-vpn"},
-// 					},
-// 				},
-// 			},
-// 		},
-// 	}
+// loadTestCases reads a JSON file of test cases from disk.
+func loadTestCases(t *testing.T, path string) []testCase {
+	t.Helper()
 
-// 	// Initialize the engine with the mock store
-// 	authzEngine := New(mockStore)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
 
-// 	// Define our test cases
-// 	tests := []AccessTest{
-// 		{
-// 			name: "Authorized Request - Meets all conditions",
-// 			request: EvaluationRequest{
-// 				ResourceType: "endpoint-threat-log",
-// 				Action:       "READ",
-// 				PrincipalAttributes: map[string]string{
-// 					"roles": "User,SecurityAdmin,DevOps",
-// 				},
-// 				EnvironmentAttributes: map[string]string{
-// 					"network_zone": "internal-vpn",
-// 				},
-// 			},
-// 			expectAllowed: true,
-// 			expectPolicy:  "pol-threat-001",
-// 		},
-// 		{
-// 			name: "Unauthorized Request - Wrong network zone",
-// 			request: EvaluationRequest{
-// 				ResourceType: "endpoint-threat-log",
-// 				Action:       "READ",
-// 				PrincipalAttributes: map[string]string{
-// 					"roles": "SecurityAdmin",
-// 				},
-// 				EnvironmentAttributes: map[string]string{
-// 					"network_zone": "public-internet", // Fails condition
-// 				},
-// 			},
-// 			expectAllowed: false,
-// 			expectPolicy:  "",
-// 		},
-// 		{
-// 			name: "Unauthorized Request - Missing Role",
-// 			request: EvaluationRequest{
-// 				ResourceType: "endpoint-threat-log",
-// 				Action:       "READ",
-// 				PrincipalAttributes: map[string]string{
-// 					"roles": "DevOps", // Missing SecurityAdmin
-// 				},
-// 				EnvironmentAttributes: map[string]string{
-// 					"network_zone": "internal-vpn",
-// 				},
-// 			},
-// 			expectAllowed: false,
-// 			expectPolicy:  "",
-// 		},
-// 	}
+	var cases []testCase
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatalf("failed to parse %s: %v", path, err)
+	}
 
-// 	runTests(t, tests, authzEngine)
+	return cases
+}
 
-// }
+// loadAllTestCases loads every JSON scenario file under testdata.
+func loadAllTestCases(t *testing.T) []testCase {
+	t.Helper()
+
+	paths, err := filepath.Glob(filepath.Join("testdata", "*.json"))
+	if err != nil {
+		t.Fatalf("failed to list testdata files: %v", err)
+	}
+
+	var cases []testCase
+	for _, path := range paths {
+		cases = append(cases, loadTestCases(t, path)...)
+	}
+	return cases
+}
+
+// TestEngine_Test feeds the engine with scenario files under testdata.
+func TestEngine_Test(t *testing.T) {
+	runTestCases(t, loadAllTestCases(t))
+}

@@ -1,0 +1,132 @@
+[
+  {
+    "name": "Authorized, all conditions met",
+    "policies": [
+      {
+        "id": "pol-threat-001",
+        "description": "Security Admins can read endpoint threat logs from the internal VPN",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "endpoint-threat-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["internal-vpn"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "endpoint-threat-log",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["User", "SecurityAdmin", "DevOps"]
+      },
+      "environment_attributes": {
+        "network_zone": ["internal-vpn"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "pol-threat-001"
+  },
+  {
+    "name": "Implicit deny, wrong network zone",
+    "policies": [
+      {
+        "id": "pol-threat-001",
+        "description": "Security Admins can read endpoint threat logs from the internal VPN",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "endpoint-threat-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["internal-vpn"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "endpoint-threat-log",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["SecurityAdmin"]
+      },
+      "environment_attributes": {
+        "network_zone": ["public-internet"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": "",
+    "want_reason": "Implict Deny: No matching polices"
+  },
+  {
+    "name": "Implicit deny, non-matching resource type",
+    "policies": [
+      {
+        "id": "pol-threat-001",
+        "description": "Security Admins can read endpoint threat logs from the internal VPN",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "endpoint-threat-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["internal-vpn"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "billing-system",
+      "action": "READ",
+      "principal_attributes": {
+        "roles": ["SecurityAdmin"]
+      },
+      "environment_attributes": {
+        "network_zone": ["internal-vpn"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": ""
+  },
+  {
+    "name": "Explicit DENY policy matched",
+    "policies": [
+      {
+        "id": "pol-deny-001",
+        "description": "Block writes from the public internet",
+        "access": "DENY",
+        "target": {
+          "resource_type": "internal-database",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["public-internet"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "internal-database",
+      "action": "WRITE",
+      "environment_attributes": {
+        "network_zone": ["public-internet"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": "pol-deny-001"
+  }
+]
