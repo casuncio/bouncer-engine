@@ -1,0 +1,182 @@
+[
+  {
+    "name": "REGEX basic match",
+    "policies": [
+      {
+        "id": "pol-regex-001",
+        "description": "Admin-prefixed principals may read audit logs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "audit-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.username",
+            "operator": "REGEX",
+            "value": ["^admin-.*"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "audit-log",
+      "action": "READ",
+      "principal_attributes": {
+        "username": ["admin-dev"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "pol-regex-001"
+  },
+  {
+    "name": "REGEX no match",
+    "policies": [
+      {
+        "id": "pol-regex-001",
+        "description": "Admin-prefixed principals may read audit logs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "audit-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.username",
+            "operator": "REGEX",
+            "value": ["^admin-.*"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "audit-log",
+      "action": "READ",
+      "principal_attributes": {
+        "username": ["user-dev"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": ""
+  },
+  {
+    "name": "REGEX case sensitivity",
+    "policies": [
+      {
+        "id": "pol-regex-002",
+        "description": "Admin (capital A) principals only",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "audit-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.username",
+            "operator": "REGEX",
+            "value": ["^Admin"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "audit-log",
+      "action": "READ",
+      "principal_attributes": {
+        "username": ["admin-dev"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": ""
+  },
+  {
+    "name": "REGEX email-like pattern",
+    "policies": [
+      {
+        "id": "pol-regex-003",
+        "description": "Allow example.com email users to read audit logs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "audit-log",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.email",
+            "operator": "REGEX",
+            "value": ["^[a-z]+@example\\.com$"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "audit-log",
+      "action": "READ",
+      "principal_attributes": {
+        "email": ["devops@example.com"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "pol-regex-003"
+  },
+  {
+    "name": "REGEX special characters",
+    "policies": [
+      {
+        "id": "pol-regex-004",
+        "description": "Allow requests from 10.50.x.x IPs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "customer-database",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.ip_address",
+            "operator": "REGEX",
+            "value": ["10\\.50\\..*"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "customer-database",
+      "action": "READ",
+      "environment_attributes": {
+        "ip_address": ["10.50.0.40"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "pol-regex-004"
+  },
+  {
+    "name": "REGEX with DENY policy",
+    "policies": [
+      {
+        "id": "pol-regex-deny-001",
+        "description": "Block test and staging environments from production writes",
+        "access": "DENY",
+        "target": {
+          "resource_type": "production-database",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.name",
+            "operator": "REGEX",
+            "value": ["^(test|staging)-.*"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "production-database",
+      "action": "WRITE",
+      "environment_attributes": {
+        "name": ["staging-api"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": "pol-regex-deny-001"
+  }
+]

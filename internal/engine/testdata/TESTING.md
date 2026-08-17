@@ -10,6 +10,8 @@ Existing files:
 * `testdata/basic_operators.json` — allow scenarios for each condition operator.
 * `testdata/deny_scenarios.json` — implicit deny, target-mismatch, and explicit
   `DENY` scenarios.
+* `testdata/regex_scenarios.json` — REGEX operator: match, no match, case
+  sensitivity, complex patterns, and DENY with regex.
 
 ## Test case schema
 
@@ -40,7 +42,7 @@ Each condition has:
 | Field       | Type     | Description                                  |
 | ----------- | -------- | -------------------------------------------- |
 | `attribute` | string   | Dot-prefixed key, e.g. `environment.network_zone`. |
-| `operator`  | string   | `EQUALS`, `CONTAINS_ALL`, or `CONTAINS_ANY`. |
+| `operator`  | string   | `EQUALS`, `CONTAINS_ALL`, `CONTAINS_ANY`, `IN_CIDR`, `BETWEEN`, or `REGEX`. |
 | `value`     | []string | Values the condition compares against.       |
 
 ### Request object

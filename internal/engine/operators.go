@@ -1,6 +1,10 @@
 package engine
 
 import (
+	"net"
+	"regexp"
+	"strconv"
+
 	"github.com/casuncio/bouncer-engine/internal/store"
 )
 
@@ -20,6 +24,12 @@ func EvaluateCondition(cond store.Condition, attributes map[string][]string) boo
 		return evalContainsAll(cond.Value, requestVal)
 	case "CONTAINS_ANY":
 		return evalContainsAny(cond.Value, requestVal)
+	case "IN_CIDR":
+		return evalInCIDR(cond.Value, requestVal)
+	case "BETWEEN":
+		return evalBetween(cond.Value, requestVal)
+	case "REGEX":
+		return evalRegex(cond.Value, requestVal)
 	default:
 		return false // unknown operator
 	}
@@ -81,6 +91,7 @@ func evalContainsAll(condValues []string, requestValues []string) bool {
 	return true
 }
 
+// Contains Any
 func evalContainsAny(condValues []string, requestValues []string) bool {
 	// Trivial case, there are no conditions
 	if len(condValues) == 0 {
@@ -106,4 +117,78 @@ func evalContainsAny(condValues []string, requestValues []string) bool {
 	}
 
 	return false
+}
+
+// In CIDR
+func evalInCIDR(condValues []string, requestValue []string) bool {
+	// trivial
+	if len(condValues) == 0 || len(requestValue) != 1 {
+		return false
+	}
+
+	ipAddr := net.ParseIP(requestValue[0])
+	if ipAddr == nil {
+		// log error
+		return false
+	}
+
+	for _, condValue := range condValues {
+		// parse CIDR
+		_, ipNet, err := net.ParseCIDR(condValue)
+		if err != nil {
+			// log error, continue for now
+			continue
+		}
+
+		// ipAddr is in one of the accepted CIDRs
+		if ipNet.Contains(ipAddr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Between, handles numerical range check
+func evalBetween(condValue []string, requestValue []string) bool {
+
+	// trivial
+	if len(condValue) != 2 || len(requestValue) != 1 {
+		return false
+	}
+
+	lowVal, err := strconv.Atoi(condValue[0])
+	if err != nil {
+		// log err
+		return false
+	}
+
+	highVal, err := strconv.Atoi(condValue[1])
+	if err != nil {
+		// log err
+		return false
+	}
+
+	val, err := strconv.Atoi(requestValue[0])
+	if err != nil {
+		// log err
+		return false
+	}
+
+	return lowVal <= val && highVal >= val
+}
+
+// REGEX
+func evalRegex(condValue []string, requestValue []string) bool {
+	// trivial
+	if len(condValue) != 1 || len(requestValue) != 1 {
+		return false
+	}
+
+	matched, err := regexp.MatchString(condValue[0], requestValue[0])
+	if err != nil {
+		// log err
+		return false
+	}
+	return matched
 }

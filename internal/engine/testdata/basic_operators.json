@@ -163,5 +163,71 @@
     },
     "want_allowed": true,
     "want_policy_id": "basic-contains-any"
+  },
+  {
+    "name": "IN_CIDR basic test",
+    "policies": [
+      {
+        "id": "basic-in-cidr",
+        "description": "Database access restricted to internal VPN",
+        "access": "ALLOW",
+        "target": {
+          "resource_type":"customer-database",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.ip_address",
+            "operator": "IN_CIDR",
+            "value": ["10.50.0.0/16"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "customer-database",
+      "action": "WRITE",
+      "principal_attributes": {
+        "roles": ["SalesDept"]
+      },
+      "environment_attributes": {
+        "ip_address": ["10.50.0.40"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-in-cidr"
+  },
+  {
+    "name": "BETWEEN basic test",
+    "policies": [
+      {
+        "id": "basic-between",
+        "description": "Database access restricted to business hours",
+        "access": "ALLOW",
+        "target": {
+          "resource_type":"inventory-database",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.hour_of_day",
+            "operator": "BETWEEN",
+            "value": ["9","16"] 
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "inventory-database",
+      "action": "WRITE",
+      "principal_attributes": {
+        "roles": ["Admin"]
+      },
+      "environment_attributes": {
+        "hour_of_day": ["12"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "basic-between"
   }
 ]
