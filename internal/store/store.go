@@ -71,7 +71,7 @@ func (store *PolicyStore) DeletePolicy(id string) {
 			return
 		}
 
-		// create copy, with policy to be removed missing.
+		// create copy, with policy to be removed not included
 		newMap := make(PolicyMap, len(currentMap)-1)
 		for k, v := range currentMap {
 			if k != id {
