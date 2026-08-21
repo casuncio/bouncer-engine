@@ -1,7 +1,4 @@
-# This workflow will build and test bouncer-engine
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
-name: Go
+name: CI
 
 on:
   push:
@@ -10,21 +7,30 @@ on:
     branches: [ "main" ]
 
 jobs:
-
-  build:
+  test:
+    name: Build, Test, and Benchmark
     runs-on: ubuntu-latest
     steps:
-    - name: Check out Code 
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.26.5'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
 
-    - name: Run Tests
-      run: go test -v ./...
+      - name: Verify Dependencies
+        run: go mod verify
 
-    - name: Build
-      run: go build -v ./...
+      - name: Build Engine
+        # Ensures the standalone binary compiles without errors
+        run: make build
 
+      - name: Run Unit Tests
+        # Executes your race-detector enabled test suite
+        run: make test
+
+      - name: Run Performance Benchmarks
+        # Validates your zero-allocation parsing constraints
+        run: make bench
