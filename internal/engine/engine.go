@@ -32,25 +32,6 @@ type EvaluationResponse struct {
 	EvaluationTimeNs int64
 }
 
-// FlattenAttributes merges all contextual attributes into a single map with
-// dot-notaton prefixes for keys, principal.<> resource.<> environment.<>
-func (req *EvaluationRequest) FlattenAttributes() map[string][]string {
-	attrMap := make(map[string][]string)
-
-	for k, v := range req.PrincipalAttributes {
-		attrMap[fmt.Sprintf("principal.%s", k)] = v
-	}
-
-	for k, v := range req.ResourceAttributes {
-		attrMap[fmt.Sprintf("resource.%s", k)] = v
-	}
-
-	for k, v := range req.EnvironmentAttributes {
-		attrMap[fmt.Sprintf("environment.%s", k)] = v
-	}
-	return attrMap
-}
-
 // Engine holds the dependencies for evaluation
 type Engine struct {
 	provider PolicyProvider
@@ -63,15 +44,13 @@ func New(provider PolicyProvider) *Engine {
 	}
 }
 
-func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (*EvaluationResponse, error) {
+func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (EvaluationResponse, error) {
 	startTime := time.Now()
-
-	flatAttr := req.FlattenAttributes()
 
 	// fetch policies
 	policies, err := engine.provider.ListActivePolicies(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list policies: %w", err)
+		return EvaluationResponse{}, fmt.Errorf("failed to list policies: %w", err)
 	}
 
 	// evaluate each policy
@@ -81,27 +60,28 @@ func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (
 		}
 
 		// Evaluate conditions for this policy they must all evaluate to true
-		allCondMet := true
+		allCondsMet := true
 		for _, cond := range policy.Conditions {
-			if !EvaluateCondition(cond, flatAttr) {
-				allCondMet = false
-				break // no need to check rest of conditions, this policy does not match
+			// Pass the raw request instead of a flattened map
+			if !EvaluateCondition(cond, req) {
+				allCondsMet = false
+				break
 			}
 		}
 
 		// Policy matched all conditions are met
-		if allCondMet {
-			return &EvaluationResponse{
+		if allCondsMet {
+			return EvaluationResponse{
 				Allowed:          (policy.Access == store.AccessAllow),
 				MatchedPolicyID:  policy.ID,
-				Reason:           fmt.Sprintf("Matched policy: %s", policy.Description),
+				Reason:           "Matched policy",
 				EvaluationTimeNs: int64(time.Since(startTime)),
 			}, nil
 		}
 	}
 
 	// Deny by Default, no policies match
-	return &EvaluationResponse{
+	return EvaluationResponse{
 		Allowed:          false,
 		MatchedPolicyID:  "",
 		Reason:           "Implict Deny: No matching polices",

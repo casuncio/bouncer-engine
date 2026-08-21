@@ -1,17 +1,35 @@
 package engine
 
 import (
-	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/casuncio/bouncer-engine/internal/store"
 )
 
-func EvaluateCondition(cond store.Condition, attributes map[string][]string) bool {
-	// get the attribute value from request that cooresponds to this condition
-	requestVal, exists := attributes[cond.Attribute]
+func EvaluateCondition(cond store.Condition, req *EvaluationRequest) bool {
+	// 1. Zero-allocation split (e.g., "principal.roles" -> "principal", "roles")
+	prefix, key, found := strings.Cut(cond.Attribute, ".")
+	if !found {
+		return false
+	}
 
+	var requestValues []string
+	var exists bool
+
+	// 2. Route directly to the existing map based on the prefix
+	switch prefix {
+	case "principal":
+		requestValues, exists = req.PrincipalAttributes[key]
+	case "resource":
+		requestValues, exists = req.ResourceAttributes[key]
+	case "environment":
+		requestValues, exists = req.EnvironmentAttributes[key]
+	default:
+		return false
+	}
 	// attribute value for this condtion not found
 	if !exists {
 		return false
@@ -19,17 +37,17 @@ func EvaluateCondition(cond store.Condition, attributes map[string][]string) boo
 
 	switch cond.Operator {
 	case "EQUALS":
-		return evalEquals(cond.Value, requestVal)
+		return evalEquals(cond.Value, requestValues)
 	case "CONTAINS_ALL":
-		return evalContainsAll(cond.Value, requestVal)
+		return evalContainsAll(cond.Value, requestValues)
 	case "CONTAINS_ANY":
-		return evalContainsAny(cond.Value, requestVal)
+		return evalContainsAny(cond.Value, requestValues)
 	case "IN_CIDR":
-		return evalInCIDR(cond.Value, requestVal)
+		return evalInCIDR(cond.Value, requestValues)
 	case "BETWEEN":
-		return evalBetween(cond.Value, requestVal)
+		return evalBetween(cond.Value, requestValues)
 	case "REGEX":
-		return evalRegex(cond.Value, requestVal)
+		return evalRegex(cond.CompiledRegex, requestValues)
 	default:
 		return false // unknown operator
 	}
@@ -39,7 +57,6 @@ func EvaluateCondition(cond store.Condition, attributes map[string][]string) boo
 
 // Equals
 func evalEquals(condValues []string, requestValues []string) bool {
-	// Future: look for optimizations here
 	// Fast fail if lengths are not equal
 	if len(condValues) != len(requestValues) {
 		return false
@@ -120,29 +137,30 @@ func evalContainsAny(condValues []string, requestValues []string) bool {
 }
 
 // In CIDR
-func evalInCIDR(condValues []string, requestValue []string) bool {
-	// trivial
-	if len(condValues) == 0 || len(requestValue) != 1 {
+// evaluateInCIDR checks if the single requested IP falls within ANY of the condition's CIDR blocks.
+// Uses net/netip for zero-allocation parsing on the stack.
+func evalInCIDR(condValues []string, requestValues []string) bool {
+	// Trivial check: We need at least one CIDR condition and exactly one request IP
+	if len(condValues) == 0 || len(requestValues) != 1 {
 		return false
 	}
 
-	ipAddr := net.ParseIP(requestValue[0])
-	if ipAddr == nil {
-		// log error
-		return false
+	// 1. Parse the request IP exactly once
+	reqIP, err := netip.ParseAddr(requestValues[0])
+	if err != nil {
+		return false // Fail securely if the incoming IP is malformed
 	}
 
-	for _, condValue := range condValues {
-		// parse CIDR
-		_, ipNet, err := net.ParseCIDR(condValue)
+	// 2. Iterate over the policy's allowed CIDR blocks
+	for _, cidrStr := range condValues {
+		prefix, err := netip.ParsePrefix(cidrStr)
 		if err != nil {
-			// log error, continue for now
-			continue
+			continue // Skip malformed policy CIDRs and check the next one
 		}
 
-		// ipAddr is in one of the accepted CIDRs
-		if ipNet.Contains(ipAddr) {
-			return true
+		// 3. Check if the parsed IP falls inside this specific subnet
+		if prefix.Contains(reqIP) {
+			return true // Match found!
 		}
 	}
 
@@ -179,16 +197,17 @@ func evalBetween(condValue []string, requestValue []string) bool {
 }
 
 // REGEX
-func evalRegex(condValue []string, requestValue []string) bool {
+func evalRegex(compiledRegex *regexp.Regexp, requestValues []string) bool {
 	// trivial
-	if len(condValue) != 1 || len(requestValue) != 1 {
+	if compiledRegex == nil || len(requestValues) == 0 {
 		return false
 	}
 
-	matched, err := regexp.MatchString(condValue[0], requestValue[0])
-	if err != nil {
-		// log err
-		return false
+	for _, val := range requestValues {
+		if compiledRegex.MatchString(val) {
+			return true
+		}
 	}
-	return matched
+
+	return false
 }

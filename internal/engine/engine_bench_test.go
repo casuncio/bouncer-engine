@@ -7,28 +7,40 @@ import (
 	"github.com/casuncio/bouncer-engine/internal/store"
 )
 
+// Create Mock Store for benchmark
+func createMockStoreB(b *testing.B, policies []store.Policy) *mockStore {
+
+	for i := range policies {
+		if err := policies[i].Compile(); err != nil {
+			b.Fatalf("Error compiling policy %s: %v", policies[i].ID, err)
+		}
+	}
+
+	return &mockStore{
+		policies: policies,
+	}
+}
+
 // BenchmarkEngine_Evaluate simulates a high-throughput access check.
 func BenchmarkEngine_Evaluate(b *testing.B) {
-	engine := New(&mockStore{
-		policies: []store.Policy{
-			{
-				ID:     "pol-bench-all-ops",
-				Access: store.AccessAllow,
-				Target: store.Target{
-					ResourceType: "customer-database",
-					Action:       "READ",
-				},
-				Conditions: []store.Condition{
-					{Attribute: "principal.role", Operator: "EQUALS", Value: []string{"admin"}},
-					{Attribute: "resource.tags", Operator: "CONTAINS_ALL", Value: []string{"sensitive", "production"}},
-					{Attribute: "resource.classifications", Operator: "CONTAINS_ANY", Value: []string{"confidential", "restricted"}},
-					{Attribute: "environment.ip_address", Operator: "IN_CIDR", Value: []string{"10.50.0.0/16"}},
-					{Attribute: "environment.timestamp", Operator: "BETWEEN", Value: []string{"1786924800", "1786932000"}},
-					{Attribute: "principal.email", Operator: "REGEX", Value: []string{`^[a-z]+\@example\.com$`}},
-				},
+
+	engine := New(createMockStoreB(b, []store.Policy{
+		{
+			ID:     "pol-bench-all-ops",
+			Access: store.AccessAllow,
+			Target: store.Target{
+				ResourceType: "customer-database",
+				Action:       "READ",
 			},
-		},
-	})
+			Conditions: []store.Condition{
+				{Attribute: "principal.role", Operator: "EQUALS", Value: []string{"admin"}},
+				{Attribute: "resource.tags", Operator: "CONTAINS_ALL", Value: []string{"sensitive", "production"}},
+				{Attribute: "resource.classifications", Operator: "CONTAINS_ANY", Value: []string{"confidential", "restricted"}},
+				{Attribute: "environment.ip_address", Operator: "IN_CIDR", Value: []string{"10.50.0.0/16"}},
+				{Attribute: "environment.timestamp", Operator: "BETWEEN", Value: []string{"1786924800", "1786932000"}},
+				{Attribute: "principal.email", Operator: "REGEX", Value: []string{`^[a-z]+\@example\.com$`}},
+			},
+		}}))
 
 	req := &EvaluationRequest{
 		PrincipalID:  "usr-88912a",
@@ -211,18 +223,18 @@ func BenchmarkOperator_BETWEEN(b *testing.B) {
 }
 
 func BenchmarkOperator_REGEX(b *testing.B) {
-	engine := New(&mockStore{
-		policies: []store.Policy{
-			{
-				ID:     "pol-regex",
-				Access: store.AccessAllow,
-				Target: store.Target{ResourceType: "doc", Action: "READ"},
-				Conditions: []store.Condition{
-					{Attribute: "principal.email", Operator: "REGEX", Value: []string{`^[a-z]+\@example\.com$`}},
-				},
+	policies := []store.Policy{
+		{
+			ID:     "pol-regex",
+			Access: store.AccessAllow,
+			Target: store.Target{ResourceType: "doc", Action: "READ"},
+			Conditions: []store.Condition{
+				{Attribute: "principal.email", Operator: "REGEX", Value: []string{`^[a-z]+\@example\.com$`}},
 			},
 		},
-	})
+	}
+
+	engine := New(createMockStoreB(b, policies))
 	req := &EvaluationRequest{
 		PrincipalID:  "usr-1",
 		ResourceType: "doc",

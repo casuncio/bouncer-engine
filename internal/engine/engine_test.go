@@ -15,13 +15,27 @@ type mockStore struct {
 	policies []store.Policy
 }
 
+// Create Mock Store for unittesting
+func createMockStore(t *testing.T, policies []store.Policy) *mockStore {
+
+	for i := range policies {
+		if err := policies[i].Compile(); err != nil {
+			t.Fatalf("Error compiling policy %s: %v", policies[i].ID, err)
+		}
+	}
+
+	return &mockStore{
+		policies: policies,
+	}
+}
+
 func (m *mockStore) ListActivePolicies(ctx context.Context) ([]store.Policy, error) {
 	return m.policies, nil
 }
 
 // checkFunc is an injectable evaluation function so a table of cases can be
 // run against any engine implementation (e.g. middleware wrapping CheckAccess).
-type checkFunc func(ctx context.Context, req *EvaluationRequest) (*EvaluationResponse, error)
+type checkFunc func(ctx context.Context, req *EvaluationRequest) (EvaluationResponse, error)
 
 // testCase describes a single authorization scenario. The json tags let the
 // same struct be fed from testdata files; Check is never decoded.
@@ -53,7 +67,7 @@ func runTestCase(t *testing.T, tc testCase) {
 
 	check := tc.Check
 	if check == nil {
-		engine := New(&mockStore{policies: tc.Policies})
+		engine := New(createMockStore(t, tc.Policies))
 		check = engine.CheckAccess
 	}
 
@@ -90,6 +104,15 @@ func loadTestCases(t *testing.T, path string) []testCase {
 	var cases []testCase
 	if err := json.Unmarshal(data, &cases); err != nil {
 		t.Fatalf("failed to parse %s: %v", path, err)
+	}
+
+	for i := range cases {
+		for j := range cases[i].Policies {
+			policy := cases[i].Policies[j]
+			if err := policy.Compile(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	return cases
