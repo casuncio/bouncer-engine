@@ -96,6 +96,22 @@ func (s *AuthzServer) processUpdate(req *pb.PolicyUpdateRequest) {
 			return
 		}
 
+		if p.Access != store.AccessAllow {
+			slog.Error("rejected policy payload: only ALLOW policies are supported",
+				slog.String("policy_id", req.PolicyId),
+				slog.String("access", string(p.Access)),
+			)
+			return
+		}
+
+		if err := p.Compile(); err != nil {
+			slog.Error("failed to compile incoming policy payload",
+				slog.String("policy_id", req.PolicyId),
+				slog.String("error", err.Error()),
+			)
+			return
+		}
+
 		s.store.UpsertPolicy(p)
 		slog.Info("policy upserted into live cache",
 			slog.String("policy_id", p.ID),

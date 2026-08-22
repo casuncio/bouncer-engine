@@ -34,7 +34,7 @@ func main() {
 	// 3. Push a dynamic policy update
 	policyJSON := `{
 		"id": "pol-mock-001",
-		"name": "Allow Admin Read",
+		"description": "Allow Admin Read",
 		"access": "ALLOW",
 		"target": {"resource_type": "dashboard", "action": "READ"},
 		"conditions": [{"attribute": "principal.role", "operator": "EQUALS", "value": ["admin"]}]
