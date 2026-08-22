@@ -74,7 +74,7 @@ func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (
 			return EvaluationResponse{
 				Allowed:          (policy.Access == store.AccessAllow),
 				MatchedPolicyID:  policy.ID,
-				Reason:           "Matched policy",
+				Reason:           "Matched Policy",
 				EvaluationTimeNs: int64(time.Since(startTime)),
 			}, nil
 		}

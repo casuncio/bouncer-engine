@@ -26,31 +26,32 @@ Unlike standard Role-Based Access Control (RBAC) which relies on static group as
 * `internal/` - Private application logic (Policy Engine, Datastore, Audit Pipeline).
 * `pkg/` - Public libraries and generated client stubs.
 
-## Performance Benchmarks (Optimized)
+## 🚀 Performance Benchmarks (Optimized)
 
 Bouncer Engine is strictly engineered for high-throughput, low-latency authorization checks. The following benchmarks represent our **optimized, zero-allocation** evaluation path running on a single CPU thread (`-cpu=1`) to simulate strict production container constraints.
 
 ### 1. Project Targets
 * **Evaluation Latency:** < 2 ms (p99) for in-memory decision evaluations.
-* **Throughput:** > 10,000 RPS per instance on 1 vCPU / 1 GB RAM[cite: 6].
+* **Throughput:** > 10,000 RPS per instance on 1 vCPU / 1 GB RAM.
+* **Memory Efficiency:** 0 heap allocations on the critical evaluation path (`0 allocs/op`).
 
 ### 2. Benchmark Results
-*Hardware: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz (Constrained to 1 vCPU / 1 GB RAM)*
+*Hardware: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz (Constrained to 1 vCPU / 1 GB RAM via Docker)*
 
-| Component / Operator | Execution Speed (ns/op) | Memory Allocated (B/op) | Heap Allocations (allocs/op) |
-| :--- | :--- | :--- | :--- |
-| **Full Engine Evaluation** | 851.8 | 0 | 0 |
-| **Operator: EQUALS** | 159.8 | 0 | 0 |
-| **Operator: CONTAINS_ALL** | 180.1 | 0 | 0 |
-| **Operator: CONTAINS_ANY** | 144.6 | 0 | 0 |
-| **Operator: BETWEEN** | 144.3 | 0 | 0 |
-| **Operator: IN_CIDR** | 178.0 | 0 | 0 |
-| **Operator: REGEX** | 305.8 | 0 | 0 |
+| Component / Operator | Execution Speed (ns/op) | Memory Allocated (B/op) | Heap Allocations (allocs/op) | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Full Engine Evaluation** | **1,495.0** | **0** | **0** | 🟢 Passing |
+| **Operator: EQUALS** | 260.1 | 0 | 0 | 🟢 Passing |
+| **Operator: CONTAINS_ALL** | 219.8 | 0 | 0 | 🟢 Passing |
+| **Operator: CONTAINS_ANY** | 238.4 | 0 | 0 | 🟢 Passing |
+| **Operator: BETWEEN** | 201.0 | 0 | 0 | 🟢 Passing |
+| **Operator: IN_CIDR** | 282.8 | 0 | 0 | 🟢 Passing |
+| **Operator: REGEX** | 422.8 | 0 | 0 | 🟢 Passing |
 
 ### 3. Engineering Analysis
-The core evaluation logic achieves **zero-allocation parsing**, meaning the Garbage Collector (GC) is not triggered during high-speed access checks. 
-
-A full ABAC policy evaluation completes in **~0.00085 milliseconds**, which easily obliterates the < 2 ms latency budget[cite: 6]. At this speed, a single CPU core can theoretically process over 1.1 million authorization evaluations per second, providing immense headroom for network and gRPC I/O overhead.
+* **Zero-Allocation Parsing:** The evaluation engine achieves **0 allocs/op** and **0 B/op** across all operators. Stack-based string lookups (`strings.Cut`), immutable IP structures (`net/netip`), and load-time regex pre-compilation eliminate heap escapes entirely.
+* **Sub-Millisecond Latency:** A complete multi-condition policy evaluation finishes in **~0.0015 ms**, safely clearing the < 2 ms latency threshold.
+* **Throughput Headroom:** With an average execution speed of 1,495 ns/op, a single constrained CPU core can theoretically sustain over **668,000 evaluations per second**, easily exceeding the > 10,000 RPS requirement while leaving ample headroom for gRPC networking and asynchronous audit logging.
 
 ## License
 

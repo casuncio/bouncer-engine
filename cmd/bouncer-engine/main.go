@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/casuncio/bouncer-engine/internal/audit"
 	"github.com/casuncio/bouncer-engine/internal/engine"
 	"github.com/casuncio/bouncer-engine/internal/server"
 	"github.com/casuncio/bouncer-engine/internal/store"
@@ -43,12 +44,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 5. Create the gRPC Server and register the Bouncer Engine service
+	// 5. Create audit logger and start log workers
+	auditLogger := audit.NewAuditLogger(10000)
+	auditLogger.Start(5)
+	defer auditLogger.Stop()
+
+	// 6. Create the gRPC Server and register the Bouncer Engine service
 	grpcServer := grpc.NewServer()
-	authzServer := server.NewAuthzServer(abacEngine, policyStore)
+	authzServer := server.NewAuthzServer(abacEngine, policyStore, auditLogger)
 	pb.RegisterAuthorizationServiceServer(grpcServer, authzServer)
 
-	// 6. Start serving live network traffic
+	// 7. Start serving live network traffic
 	slog.Info("gRPC server actively listening for authorization checks", "port", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("gRPC server crashed", "error", err)

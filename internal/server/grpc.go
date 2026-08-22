@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/casuncio/bouncer-engine/internal/audit"
 	"github.com/casuncio/bouncer-engine/internal/engine"
 	"github.com/casuncio/bouncer-engine/internal/store"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
@@ -16,13 +17,15 @@ type AuthzServer struct {
 	pb.UnimplementedAuthorizationServiceServer
 	engine *engine.Engine
 	store  *store.PolicyStore
+	audit  *audit.AuditLogger
 }
 
 // NewAuthzServer creates a new gRPC server bound to your ABAC engine
-func NewAuthzServer(e *engine.Engine, s *store.PolicyStore) *AuthzServer {
+func NewAuthzServer(e *engine.Engine, s *store.PolicyStore, a *audit.AuditLogger) *AuthzServer {
 	return &AuthzServer{
 		engine: e,
 		store:  s,
+		audit:  a,
 	}
 }
 
@@ -61,7 +64,18 @@ func (s *AuthzServer) CheckAccess(ctx context.Context, req *pb.CheckAccessReques
 		return nil, err
 	}
 
-	// 3. Map internal EvaluationResponse back to Protobuf response
+	// 3. Fire and forget the audit log to the bounded channel
+	s.audit.LogDecision(audit.AuditLog{
+		PrincipalID: req.PrincipalId,
+		Action:      req.Action,
+		ResourceID:  req.ResourceId,
+		Allowed:     evalResp.Allowed,
+		Reason:      evalResp.Reason,
+		PolicyId:    evalResp.MatchedPolicyID,
+		LatencyNs:   evalResp.EvaluationTimeNs,
+	})
+
+	// 4. Map internal EvaluationResponse back to Protobuf response
 	return &pb.CheckAccessResponse{
 		Allowed:          evalResp.Allowed,
 		MatchedPolicyId:  evalResp.MatchedPolicyID,
@@ -70,21 +84,38 @@ func (s *AuthzServer) CheckAccess(ctx context.Context, req *pb.CheckAccessReques
 	}, nil
 }
 
-// processUpdate helper function
 func (s *AuthzServer) processUpdate(req *pb.PolicyUpdateRequest) {
 	switch req.Action {
 	case "UPSERT":
 		var p store.Policy
 		if err := json.Unmarshal([]byte(req.PolicyJson), &p); err != nil {
-			slog.Error("Failed to parse policy JSON", "id", req.PolicyId, "error", err)
+			slog.Error("failed to parse incoming policy payload",
+				slog.String("policy_id", req.PolicyId),
+				slog.String("error", err.Error()),
+			)
 			return
 		}
+
 		s.store.UpsertPolicy(p)
-		slog.Info("Policy hot-reloaded successfully", "id", req.PolicyId)
+		slog.Info("policy upserted into live cache",
+			slog.String("policy_id", p.ID),
+			slog.String("policy_description", p.Description),
+			slog.String("access", string(p.Access)),
+			slog.String("resource_type", p.Target.ResourceType),
+			slog.String("action", p.Target.Action),
+			slog.Int("condition_count", len(p.Conditions)),
+		)
+
+		slog.Debug("policy condition details",
+			slog.String("policy_id", p.ID),
+			slog.Any("conditions", p.Conditions),
+		)
 
 	case "DELETE":
 		s.store.DeletePolicy(req.PolicyId)
-		slog.Info("Policy deleted successfully", "id", req.PolicyId)
+		slog.Info("policy removed from live cache",
+			slog.String("policy_id", req.PolicyId),
+		)
 	}
 }
 
