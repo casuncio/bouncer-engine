@@ -277,10 +277,15 @@ func TestIntegration_RegexPolicy_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestIntegration_DenyPolicy_RejectedAtIngest(t *testing.T) {
+func TestIntegration_DenyPolicy_OverridesAllow(t *testing.T) {
 	client := setupTestServer(t)
 
+	// Both a DENY and an ALLOW policy target the same resource/action and both
+	// would match the request. Deny-overrides must return denied with the deny
+	// policy id, deterministically, regardless of stream order.
 	applyPolicyUpdates(t, client,
+		upsertPolicy("pol-allow-001", "ALLOW", "document", "WRITE",
+			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["intern"]}]`),
 		upsertPolicy("pol-deny-001", "DENY", "document", "WRITE",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["intern"]}]`),
 	)
@@ -292,12 +297,9 @@ func TestIntegration_DenyPolicy_RejectedAtIngest(t *testing.T) {
 		t.Fatalf("unexpected CheckAccess error: %v", err)
 	}
 	if resp.Allowed {
-		t.Fatal("expected denied for intern")
+		t.Fatal("expected denied: explicit DENY must override matching ALLOW")
 	}
-	if resp.MatchedPolicyId == "pol-deny-001" {
-		t.Error("DENY policy must be rejected at ingest and never match requests")
-	}
-	if resp.MatchedPolicyId != "" {
-		t.Errorf("expected default deny with no matched policy, got %q (reason: %s)", resp.MatchedPolicyId, resp.Reason)
+	if resp.MatchedPolicyId != "pol-deny-001" {
+		t.Errorf("expected deny policy %q to win, got %q (reason: %s)", "pol-deny-001", resp.MatchedPolicyId, resp.Reason)
 	}
 }

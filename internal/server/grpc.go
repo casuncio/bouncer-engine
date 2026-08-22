@@ -96,8 +96,8 @@ func (s *AuthzServer) processUpdate(req *pb.PolicyUpdateRequest) {
 			return
 		}
 
-		if p.Access != store.AccessAllow {
-			slog.Error("rejected policy payload: only ALLOW policies are supported",
+		if p.Access != store.AccessAllow && p.Access != store.AccessDeny {
+			slog.Error("rejected policy payload: unsupported access mode",
 				slog.String("policy_id", req.PolicyId),
 				slog.String("access", string(p.Access)),
 			)

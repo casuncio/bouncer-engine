@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"os"
@@ -14,14 +13,6 @@ import (
 	"github.com/casuncio/bouncer-engine/internal/store"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
 )
-
-// dummyProvider temporarily satisfies the PolicyProvider interface
-// until the thread-safe In-Memory Policy Store is fully integrated.
-type dummyProvider struct{}
-
-func (d *dummyProvider) ListActivePolicies(ctx context.Context) ([]store.Policy, error) {
-	return []store.Policy{}, nil
-}
 
 func main() {
 	// 1. Initialize structured JSON logging

@@ -128,5 +128,100 @@
     },
     "want_allowed": false,
     "want_policy_id": "pol-deny-001"
+  },
+  {
+    "name": "Explicit deny overrides matching allow",
+    "policies": [
+      {
+        "id": "pol-allow-002",
+        "description": "Contractors may read internal docs",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "internal-docs",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.role",
+            "operator": "EQUALS",
+            "value": ["contractor"]
+          }
+        ]
+      },
+      {
+        "id": "pol-deny-002",
+        "description": "Block contractors from internal docs",
+        "access": "DENY",
+        "target": {
+          "resource_type": "internal-docs",
+          "action": "READ"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.role",
+            "operator": "EQUALS",
+            "value": ["contractor"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "internal-docs",
+      "action": "READ",
+      "principal_attributes": {
+        "role": ["contractor"]
+      }
+    },
+    "want_allowed": false,
+    "want_policy_id": "pol-deny-002"
+  },
+  {
+    "name": "Allow applies when deny does not match",
+    "policies": [
+      {
+        "id": "pol-allow-003",
+        "description": "Engineers may write to the config service",
+        "access": "ALLOW",
+        "target": {
+          "resource_type": "config-service",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "principal.role",
+            "operator": "EQUALS",
+            "value": ["engineer"]
+          }
+        ]
+      },
+      {
+        "id": "pol-deny-003",
+        "description": "Block public-internet writes to the config service",
+        "access": "DENY",
+        "target": {
+          "resource_type": "config-service",
+          "action": "WRITE"
+        },
+        "conditions": [
+          {
+            "attribute": "environment.network_zone",
+            "operator": "EQUALS",
+            "value": ["public-internet"]
+          }
+        ]
+      }
+    ],
+    "request": {
+      "resource_type": "config-service",
+      "action": "WRITE",
+      "principal_attributes": {
+        "role": ["engineer"]
+      },
+      "environment_attributes": {
+        "network_zone": ["internal-vpn"]
+      }
+    },
+    "want_allowed": true,
+    "want_policy_id": "pol-allow-003"
   }
 ]

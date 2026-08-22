@@ -10,27 +10,35 @@ import (
 	"github.com/casuncio/bouncer-engine/internal/store"
 )
 
-// mockStore implements PolicyProvider for testing.
+// mockStore implements PolicyProvider for testing. Allow and deny policies are
+// partitioned once at construction so ListActivePolicies mirrors the real
+// PolicyStore with zero per-call work.
 type mockStore struct {
-	policies []store.Policy
+	allow []store.Policy
+	deny  []store.Policy
 }
 
 // Create Mock Store for unittesting
 func createMockStore(t *testing.T, policies []store.Policy) *mockStore {
+	t.Helper()
 
+	ms := &mockStore{}
 	for i := range policies {
 		if err := policies[i].Compile(); err != nil {
 			t.Fatalf("Error compiling policy %s: %v", policies[i].ID, err)
 		}
+		if policies[i].Access == store.AccessAllow {
+			ms.allow = append(ms.allow, policies[i])
+		} else {
+			ms.deny = append(ms.deny, policies[i])
+		}
 	}
 
-	return &mockStore{
-		policies: policies,
-	}
+	return ms
 }
 
-func (m *mockStore) ListActivePolicies(ctx context.Context) ([]store.Policy, error) {
-	return m.policies, nil
+func (m *mockStore) ListActivePolicies(ctx context.Context) (store.PolicySnapshot, error) {
+	return store.PolicySnapshot{Allow: m.allow, Deny: m.deny}, nil
 }
 
 // checkFunc is an injectable evaluation function so a table of cases can be

@@ -9,16 +9,21 @@ import (
 
 // Create Mock Store for benchmark
 func createMockStoreB(b *testing.B, policies []store.Policy) *mockStore {
+	b.Helper()
 
+	ms := &mockStore{}
 	for i := range policies {
 		if err := policies[i].Compile(); err != nil {
 			b.Fatalf("Error compiling policy %s: %v", policies[i].ID, err)
 		}
+		if policies[i].Access == store.AccessAllow {
+			ms.allow = append(ms.allow, policies[i])
+		} else {
+			ms.deny = append(ms.deny, policies[i])
+		}
 	}
 
-	return &mockStore{
-		policies: policies,
-	}
+	return ms
 }
 
 // BenchmarkEngine_Evaluate simulates a high-throughput access check.
@@ -74,7 +79,7 @@ func BenchmarkEngine_Evaluate(b *testing.B) {
 
 func BenchmarkOperator_EQUALS(b *testing.B) {
 	engine := New(&mockStore{
-		policies: []store.Policy{
+		allow: []store.Policy{
 			{
 				ID:     "pol-equals",
 				Access: store.AccessAllow,
@@ -104,7 +109,7 @@ func BenchmarkOperator_EQUALS(b *testing.B) {
 
 func BenchmarkOperator_CONTAINS_ALL(b *testing.B) {
 	engine := New(&mockStore{
-		policies: []store.Policy{
+		allow: []store.Policy{
 			{
 				ID:     "pol-contains-all",
 				Access: store.AccessAllow,
@@ -134,7 +139,7 @@ func BenchmarkOperator_CONTAINS_ALL(b *testing.B) {
 
 func BenchmarkOperator_CONTAINS_ANY(b *testing.B) {
 	engine := New(&mockStore{
-		policies: []store.Policy{
+		allow: []store.Policy{
 			{
 				ID:     "pol-contains-any",
 				Access: store.AccessAllow,
@@ -164,7 +169,7 @@ func BenchmarkOperator_CONTAINS_ANY(b *testing.B) {
 
 func BenchmarkOperator_IN_CIDR(b *testing.B) {
 	engine := New(&mockStore{
-		policies: []store.Policy{
+		allow: []store.Policy{
 			{
 				ID:     "pol-cidr",
 				Access: store.AccessAllow,
@@ -194,7 +199,7 @@ func BenchmarkOperator_IN_CIDR(b *testing.B) {
 
 func BenchmarkOperator_BETWEEN(b *testing.B) {
 	engine := New(&mockStore{
-		policies: []store.Policy{
+		allow: []store.Policy{
 			{
 				ID:     "pol-between",
 				Access: store.AccessAllow,

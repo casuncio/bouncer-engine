@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func countPolicies(t *testing.T, s *PolicyStore) int {
+	t.Helper()
+	snap, err := s.ListActivePolicies(context.Background())
+	if err != nil {
+		t.Fatalf("ListActivePolicies error: %v", err)
+	}
+	return len(snap.Allow) + len(snap.Deny)
+}
+
 func TestPolicyStore_ConcurrentReadWrite(t *testing.T) {
 	store := NewPolicyStore()
 
@@ -43,12 +52,12 @@ func TestPolicyStore_ConcurrentReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				policies, err := store.ListActivePolicies(context.Background())
+				snap, err := store.ListActivePolicies(context.Background())
 				if err != nil {
 					t.Errorf("Unexpected error during read: %v", err)
 				}
-				// store may be momentarily empty during concurrent writes, just verify no panic/corruption
-				_ = policies
+				// store may be momentarily mid-transition during concurrent writes, just verify no panic/corruption
+				_ = snap
 			}
 		}()
 	}
@@ -58,10 +67,8 @@ func TestPolicyStore_ConcurrentReadWrite(t *testing.T) {
 	// Verify final state
 	// Initial (1) + (workers * iterations)
 	expectedCount := 1 + (workers * iterations)
-	finalPolicies, _ := store.ListActivePolicies(context.Background())
-
-	if len(finalPolicies) != expectedCount {
-		t.Errorf("Expected %d policies, got %d", expectedCount, len(finalPolicies))
+	if got := countPolicies(t, store); got != expectedCount {
+		t.Errorf("Expected %d policies, got %d", expectedCount, got)
 	}
 }
 
@@ -71,9 +78,8 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 		store.UpsertPolicy(Policy{ID: "pol-1", Access: AccessAllow})
 		store.DeletePolicy("pol-1")
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 0 {
-			t.Errorf("Expected 0 policies, got %d", len(policies))
+		if got := countPolicies(t, store); got != 0 {
+			t.Errorf("Expected 0 policies, got %d", got)
 		}
 	})
 
@@ -83,9 +89,8 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 
 		store.DeletePolicy("pol-does-not-exist")
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 1 {
-			t.Errorf("Expected 1 policy, got %d", len(policies))
+		if got := countPolicies(t, store); got != 1 {
+			t.Errorf("Expected 1 policy, got %d", got)
 		}
 	})
 
@@ -94,9 +99,8 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 
 		store.DeletePolicy("pol-anything")
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 0 {
-			t.Errorf("Expected 0 policies, got %d", len(policies))
+		if got := countPolicies(t, store); got != 0 {
+			t.Errorf("Expected 0 policies, got %d", got)
 		}
 	})
 
@@ -108,13 +112,16 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 
 		store.DeletePolicy("pol-b")
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 2 {
-			t.Fatalf("Expected 2 policies, got %d", len(policies))
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow)+len(snap.Deny) != 2 {
+			t.Fatalf("Expected 2 policies, got %d", len(snap.Allow)+len(snap.Deny))
 		}
 
 		ids := map[string]bool{}
-		for _, p := range policies {
+		for _, p := range snap.Allow {
+			ids[p.ID] = true
+		}
+		for _, p := range snap.Deny {
 			ids[p.ID] = true
 		}
 		if !ids["pol-a"] || !ids["pol-c"] {
@@ -131,9 +138,8 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 
 		store.DeletePolicy("pol-only")
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 0 {
-			t.Errorf("Expected 0 policies, got %d", len(policies))
+		if got := countPolicies(t, store); got != 0 {
+			t.Errorf("Expected 0 policies, got %d", got)
 		}
 	})
 
@@ -144,12 +150,12 @@ func TestPolicyStore_DeletePolicy(t *testing.T) {
 
 		store.UpsertPolicy(Policy{ID: "pol-recycle", Access: AccessDeny})
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 1 {
-			t.Fatalf("Expected 1 policy, got %d", len(policies))
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow)+len(snap.Deny) != 1 {
+			t.Fatalf("Expected 1 policy, got %d", len(snap.Allow)+len(snap.Deny))
 		}
-		if policies[0].Access != AccessDeny {
-			t.Errorf("Expected AccessDeny after re-upsert, got %s", policies[0].Access)
+		if len(snap.Deny) != 1 || snap.Deny[0].Access != AccessDeny {
+			t.Errorf("Expected AccessDeny in deny table after re-upsert")
 		}
 	})
 }
@@ -159,12 +165,12 @@ func TestPolicyStore_UpsertPolicy(t *testing.T) {
 		store := NewPolicyStore()
 		store.UpsertPolicy(Policy{ID: "pol-new", Access: AccessAllow})
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 1 {
-			t.Fatalf("Expected 1 policy, got %d", len(policies))
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow) != 1 {
+			t.Fatalf("Expected 1 allow policy, got %d", len(snap.Allow))
 		}
-		if policies[0].ID != "pol-new" {
-			t.Errorf("Expected ID pol-new, got %s", policies[0].ID)
+		if snap.Allow[0].ID != "pol-new" {
+			t.Errorf("Expected ID pol-new, got %s", snap.Allow[0].ID)
 		}
 	})
 
@@ -173,15 +179,71 @@ func TestPolicyStore_UpsertPolicy(t *testing.T) {
 		store.UpsertPolicy(Policy{ID: "pol-update", Access: AccessAllow, Description: "v1"})
 		store.UpsertPolicy(Policy{ID: "pol-update", Access: AccessDeny, Description: "v2"})
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 1 {
-			t.Fatalf("Expected 1 policy, got %d", len(policies))
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow)+len(snap.Deny) != 1 {
+			t.Fatalf("Expected 1 policy, got %d", len(snap.Allow)+len(snap.Deny))
 		}
-		if policies[0].Access != AccessDeny {
-			t.Errorf("Expected AccessDeny, got %s", policies[0].Access)
+		if len(snap.Allow) != 0 {
+			t.Errorf("Expected stale allow entry to be evicted, got %d in allow table", len(snap.Allow))
 		}
-		if policies[0].Description != "v2" {
-			t.Errorf("Expected description v2, got %s", policies[0].Description)
+		if len(snap.Deny) != 1 || snap.Deny[0].Access != AccessDeny {
+			t.Errorf("Expected AccessDeny in deny table")
+		}
+		if snap.Deny[0].Description != "v2" {
+			t.Errorf("Expected description v2, got %s", snap.Deny[0].Description)
+		}
+	})
+
+	t.Run("allow_routes_to_allow_table", func(t *testing.T) {
+		store := NewPolicyStore()
+		store.UpsertPolicy(Policy{ID: "pol-a", Access: AccessAllow})
+
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow) != 1 || len(snap.Deny) != 0 {
+			t.Fatalf("Expected 1 allow / 0 deny, got %d/%d", len(snap.Allow), len(snap.Deny))
+		}
+	})
+
+	t.Run("deny_routes_to_deny_table", func(t *testing.T) {
+		store := NewPolicyStore()
+		store.UpsertPolicy(Policy{ID: "pol-d", Access: AccessDeny})
+
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Deny) != 1 || len(snap.Allow) != 0 {
+			t.Fatalf("Expected 0 allow / 1 deny, got %d/%d", len(snap.Allow), len(snap.Deny))
+		}
+	})
+
+	t.Run("garbage_access_routes_to_deny_table", func(t *testing.T) {
+		store := NewPolicyStore()
+		store.UpsertPolicy(Policy{ID: "pol-g", Access: Access("AUDIT")})
+
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Deny) != 1 || len(snap.Allow) != 0 {
+			t.Fatalf("Expected unknown access mode to land in deny table (fail-closed), got %d/%d", len(snap.Allow), len(snap.Deny))
+		}
+	})
+
+	t.Run("access_mode_transition_moves_between_tables", func(t *testing.T) {
+		store := NewPolicyStore()
+		store.UpsertPolicy(Policy{ID: "pol-flip", Access: AccessAllow})
+		store.UpsertPolicy(Policy{ID: "pol-flip", Access: AccessDeny})
+
+		snap, _ := store.ListActivePolicies(context.Background())
+		if len(snap.Allow)+len(snap.Deny) != 1 {
+			t.Fatalf("Expected exactly 1 policy after transition, got %d", len(snap.Allow)+len(snap.Deny))
+		}
+		if len(snap.Allow) != 0 || len(snap.Deny) != 1 {
+			t.Fatalf("Expected policy moved to deny table, got allow=%d deny=%d", len(snap.Allow), len(snap.Deny))
+		}
+
+		store.UpsertPolicy(Policy{ID: "pol-flip", Access: AccessAllow})
+		snap, _ = store.ListActivePolicies(context.Background())
+		if len(snap.Allow)+len(snap.Deny) != 1 {
+			t.Fatalf("Expected exactly 1 policy after flip back, got %d", len(snap.Allow)+len(snap.Deny))
+		}
+		if len(snap.Allow) != 1 || len(snap.Deny) != 0 {
+			t.Fatalf("Expected policy moved back to allow table, got allow=%d deny=%d", len(snap.Allow), len(snap.Deny))
 		}
 	})
 }
@@ -208,9 +270,8 @@ func TestPolicyStore_DeletePolicy_Concurrent(t *testing.T) {
 		}
 		wg.Wait()
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 0 {
-			t.Errorf("Expected 0 policies after deleting all, got %d", len(policies))
+		if got := countPolicies(t, store); got != 0 {
+			t.Errorf("Expected 0 policies after deleting all, got %d", got)
 		}
 	})
 
@@ -241,12 +302,12 @@ func TestPolicyStore_DeletePolicy_Concurrent(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < 100; j++ {
-					policies, err := store.ListActivePolicies(context.Background())
+					snap, err := store.ListActivePolicies(context.Background())
 					if err != nil {
 						t.Errorf("Unexpected error during read: %v", err)
 					}
 					// store may be empty during concurrent deletes, just verify no panic/corruption
-					_ = policies
+					_ = snap
 				}
 			}()
 		}
@@ -281,8 +342,8 @@ func TestPolicyStore_DeletePolicy_Concurrent(t *testing.T) {
 
 		wg.Wait()
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		total := len(policies)
+		snap, _ := store.ListActivePolicies(context.Background())
+		total := len(snap.Allow) + len(snap.Deny)
 
 		// Final state: key either exists (1) or doesn't (0), no panics or corruption
 		if total > 1 {
@@ -305,9 +366,8 @@ func TestPolicyStore_DeletePolicy_Concurrent(t *testing.T) {
 		}
 		wg.Wait()
 
-		policies, _ := store.ListActivePolicies(context.Background())
-		if len(policies) != 0 {
-			t.Errorf("Expected 0 policies after concurrent delete of same key, got %d", len(policies))
+		if got := countPolicies(t, store); got != 0 {
+			t.Errorf("Expected 0 policies after concurrent delete of same key, got %d", got)
 		}
 	})
 }

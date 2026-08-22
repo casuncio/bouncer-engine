@@ -10,7 +10,7 @@ import (
 
 // PolicyProvider interface defines how engine fetchs active rules
 type PolicyProvider interface {
-	ListActivePolicies(ctx context.Context) ([]store.Policy, error)
+	ListActivePolicies(ctx context.Context) (store.PolicySnapshot, error)
 }
 
 // EvaluationRequest represents an incoming Authorization check
@@ -48,36 +48,30 @@ func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (
 	startTime := time.Now()
 
 	// fetch policies
-	policies, err := engine.provider.ListActivePolicies(ctx)
+	snapshot, err := engine.provider.ListActivePolicies(ctx)
 	if err != nil {
 		return EvaluationResponse{}, fmt.Errorf("failed to list policies: %w", err)
 	}
 
-	// evaluate each policy
-	for _, policy := range policies {
-		if (policy.Target.ResourceType != req.ResourceType) || (policy.Target.Action != req.Action) {
-			continue // this policy does not apply, skip
-		}
+	// Phase 1: Explicit deny overrides everything. A matching deny policy
+	// short-circuits before allow policies are considered.
+	if policy, matched := firstMatch(snapshot.Deny, req); matched {
+		return EvaluationResponse{
+			Allowed:          false,
+			MatchedPolicyID:  policy.ID,
+			Reason:           "Explicit Deny: Matched deny policy",
+			EvaluationTimeNs: int64(time.Since(startTime)),
+		}, nil
+	}
 
-		// Evaluate conditions for this policy they must all evaluate to true
-		allCondsMet := true
-		for _, cond := range policy.Conditions {
-			// Pass the raw request instead of a flattened map
-			if !EvaluateCondition(cond, req) {
-				allCondsMet = false
-				break
-			}
-		}
-
-		// Policy matched all conditions are met
-		if allCondsMet {
-			return EvaluationResponse{
-				Allowed:          (policy.Access == store.AccessAllow),
-				MatchedPolicyID:  policy.ID,
-				Reason:           "Matched Policy",
-				EvaluationTimeNs: int64(time.Since(startTime)),
-			}, nil
-		}
+	// Phase 2: Allow policies. First matching allow policy grants access.
+	if policy, matched := firstMatch(snapshot.Allow, req); matched {
+		return EvaluationResponse{
+			Allowed:          true,
+			MatchedPolicyID:  policy.ID,
+			Reason:           "Matched Policy",
+			EvaluationTimeNs: int64(time.Since(startTime)),
+		}, nil
 	}
 
 	// Deny by Default, no policies match
@@ -88,4 +82,29 @@ func (engine *Engine) CheckAccess(ctx context.Context, req *EvaluationRequest) (
 		EvaluationTimeNs: int64(time.Since(startTime)),
 	}, nil
 
+}
+
+// firstMatch returns the first policy in the slice whose target matches the
+// request and whose conditions all evaluate to true. Condition evaluation is
+// shared across allow and deny phases so every operator is reusable.
+func firstMatch(policies []store.Policy, req *EvaluationRequest) (store.Policy, bool) {
+	for _, policy := range policies {
+		if (policy.Target.ResourceType != req.ResourceType) || (policy.Target.Action != req.Action) {
+			continue
+		}
+
+		allCondsMet := true
+		for _, cond := range policy.Conditions {
+			if !EvaluateCondition(cond, req) {
+				allCondsMet = false
+				break
+			}
+		}
+
+		if allCondsMet {
+			return policy, true
+		}
+	}
+
+	return store.Policy{}, false
 }
