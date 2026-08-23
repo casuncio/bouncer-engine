@@ -142,9 +142,14 @@ func (s *AuthzServer) StreamPolicyUpdates(stream pb.AuthorizationService_StreamP
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			// The client closed the stream
+			// The client closed the stream. Report the live active policy count
+			// so callers (e.g. the PEP seeding the store) can confirm ingestion
+			// without a separate round-trip. Count() is lock-free.
 			slog.Info("Policy sync stream closed by client")
-			return stream.SendAndClose(&pb.PolicyUpdateResponse{Success: true})
+			return stream.SendAndClose(&pb.PolicyUpdateResponse{
+				Success:           true,
+				ActivePolicyCount: int32(s.store.Count()),
+			})
 		}
 		if err != nil {
 			slog.Error("Error reading from policy stream", "error", err)

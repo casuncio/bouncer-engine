@@ -303,3 +303,100 @@ func TestIntegration_DenyPolicy_OverridesAllow(t *testing.T) {
 		t.Errorf("expected deny policy %q to win, got %q (reason: %s)", "pol-deny-001", resp.MatchedPolicyId, resp.Reason)
 	}
 }
+
+// streamSession opens a StreamPolicyUpdates session, sends the given updates
+// in order, closes the stream, and returns the server's acknowledgement so
+// callers can assert on Success and ActivePolicyCount.
+func streamSession(t *testing.T, client pb.AuthorizationServiceClient, updates ...*pb.PolicyUpdateRequest) *pb.PolicyUpdateResponse {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.StreamPolicyUpdates(ctx)
+	if err != nil {
+		t.Fatalf("failed to open policy update stream: %v", err)
+	}
+	for _, update := range updates {
+		if err := stream.Send(update); err != nil {
+			t.Fatalf("failed to send policy update %q: %v", update.PolicyId, err)
+		}
+	}
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		t.Fatalf("failed to close policy update stream: %v", err)
+	}
+	return resp
+}
+
+// TestIntegration_StreamPolicyUpdates_ReportsActiveCount guards the contract
+// that the StreamPolicyUpdates acknowledgement reports the live active policy
+// count after the session's updates have been applied. Previously the server
+// closed the stream with a bare {Success:true} and left ActivePolicyCount at 0.
+func TestIntegration_StreamPolicyUpdates_ReportsActiveCount(t *testing.T) {
+	client := setupTestServer(t)
+
+	// 1. An empty session on a fresh store should report zero active policies.
+	resp := streamSession(t, client)
+	if !resp.GetSuccess() {
+		t.Fatalf("expected success=true on empty session, got false")
+	}
+	if got := resp.GetActivePolicyCount(); got != 0 {
+		t.Fatalf("expected active_policy_count=0 on fresh store, got %d", got)
+	}
+
+	// 2. After upserting three policies, the session response must report the
+	//    live count. This is the regression guard for the bare-{Success:true} bug.
+	resp = streamSession(t, client,
+		upsertPolicy("pol-count-001", "ALLOW", "document", "READ",
+			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["admin"]}]`),
+		upsertPolicy("pol-count-002", "DENY", "document", "WRITE",
+			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["intern"]}]`),
+		upsertPolicy("pol-count-003", "ALLOW", "vault", "UNSEAL",
+			`[{"attribute": "principal.account_id", "operator": "REGEX", "value": ["^svc-.*"]}]`),
+	)
+	if !resp.GetSuccess() {
+		t.Fatalf("expected success=true after upserts, got false")
+	}
+	if got := resp.GetActivePolicyCount(); got != 3 {
+		t.Fatalf("expected active_policy_count=3 after upserts, got %d", got)
+	}
+
+	// 3. Deleting one policy must decrement the reported count.
+	resp = streamSession(t, client, deletePolicy("pol-count-002"))
+	if !resp.GetSuccess() {
+		t.Fatalf("expected success=true after delete, got false")
+	}
+	if got := resp.GetActivePolicyCount(); got != 2 {
+		t.Fatalf("expected active_policy_count=2 after delete, got %d", got)
+	}
+
+	// 4. The reported count must reflect real store state: the surviving allow
+	//    policy still grants admin READ, and the deleted deny policy means intern
+	//    WRITE now falls through to default deny (not an explicit deny).
+	allowResp, err := checkAccess(client, "usr-admin", map[string]*pb.AttributeValues{
+		"role": {Values: []string{"admin"}},
+	}, "document", "READ")
+	if err != nil {
+		t.Fatalf("unexpected CheckAccess error: %v", err)
+	}
+	if !allowResp.Allowed || allowResp.MatchedPolicyId != "pol-count-001" {
+		t.Fatalf("expected pol-count-001 to allow admin READ, got allowed=%v matched=%q",
+			allowResp.Allowed, allowResp.MatchedPolicyId)
+	}
+
+	denyResp, err := checkAccess(client, "usr-intern", map[string]*pb.AttributeValues{
+		"role": {Values: []string{"intern"}},
+	}, "document", "WRITE")
+	if err != nil {
+		t.Fatalf("unexpected CheckAccess error: %v", err)
+	}
+	if denyResp.Allowed {
+		t.Fatalf("expected intern WRITE to be denied after deleting pol-count-002, got allowed (matched=%q)",
+			denyResp.MatchedPolicyId)
+	}
+	if denyResp.MatchedPolicyId != "" {
+		t.Errorf("expected implicit default deny (empty matched id) after deleting the deny policy, got %q",
+			denyResp.MatchedPolicyId)
+	}
+}
