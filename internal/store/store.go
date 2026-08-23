@@ -37,6 +37,15 @@ func NewPolicyStore() *PolicyStore {
 	return ps
 }
 
+// Count returns the total number of active policies across both tables. It
+// is lock-free and allocates nothing, so it is safe to call from a Prometheus
+// collector on every scrape. The two atomic loads are not mutually atomic, so
+// under concurrent mutations the sum is eventually consistent; for a gauge that
+// is acceptable.
+func (store *PolicyStore) Count() int {
+	return len(*store.allow.Load()) + len(*store.deny.Load())
+}
+
 // Implement PolicyProvider interface
 func (store *PolicyStore) ListActivePolicies(ctx context.Context) (PolicySnapshot, error) {
 	// Lock Free Read, load both table snapshots

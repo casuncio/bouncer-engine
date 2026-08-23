@@ -1,0 +1,12 @@
+apiVersion: 1
+
+datasources:
+  - name: Bouncer Prometheus
+    type: prometheus
+    access: proxy
+    # In-compose DNS: Grafana reaches Prometheus by service name on its
+    # internal port 9090 (the host mapping to :9091 is only for the web UI).
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    uid: bouncer-prometheus

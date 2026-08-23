@@ -1,0 +1,67 @@
+# Bouncer Engine observability stack: engine + Prometheus + Grafana, all in
+# one user-defined bridge network. In-compose DNS means services address each
+# other by service name (e.g. prometheus scrapes bouncer-engine:9090), so no
+# host.docker.internal and no host networking required. Works on Linux,
+# macOS, and Windows.
+#
+# Host port layout:
+#   :50051  bouncer-engine gRPC API
+#   :9090   bouncer-engine /metrics (also reachable inside compose as bouncer-engine:9090)
+#   :9091   Prometheus web UI
+#   :3000   Grafana web UI (admin / admin)
+services:
+  bouncer-engine:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: bouncer-engine
+    networks:
+      - bouncer-net
+    ports:
+      - "50051:50051" # gRPC API (for mock-client / external callers)
+      - "9090:9090"   # /metrics (for direct curl; Prometheus uses internal DNS)
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: bouncer-prometheus
+    networks:
+      - bouncer-net
+    ports:
+      - "9091:9090" # Prometheus web UI on host :9091 (engine owns :9090)
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    depends_on:
+      - bouncer-engine
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: bouncer-grafana
+    networks:
+      - bouncer-net
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  bouncer-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

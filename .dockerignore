@@ -1,0 +1,20 @@
+# Build artifacts / test scratch files (keeps context lean, avoids copying
+# a 5MB engine.test binary into the build stage).
+bin/
+engine.test
+mem.out
+*.test
+*.out
+
+# Git history + CI configs are irrelevant to the Go build.
+.git/
+.github/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# The observability stack is deployed separately; no need in the engine
+# build context.
+deploy/

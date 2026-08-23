@@ -3,12 +3,15 @@ package main
 import (
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
 	"github.com/casuncio/bouncer-engine/internal/audit"
 	"github.com/casuncio/bouncer-engine/internal/engine"
+	"github.com/casuncio/bouncer-engine/internal/metrics"
 	"github.com/casuncio/bouncer-engine/internal/server"
 	"github.com/casuncio/bouncer-engine/internal/store"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
@@ -23,6 +26,9 @@ func main() {
 
 	// 2. Initialize thread safe PolicyStore
 	policyStore := store.NewPolicyStore()
+
+	// 2b. Register Prometheus metrics (policy count gauge pulls from the store)
+	metrics.Register(policyStore)
 
 	// 3. Initialize Core PDP(Policy Decision Point) abac engine
 	abacEngine := engine.New(policyStore)
@@ -40,10 +46,24 @@ func main() {
 	auditLogger.Start(5)
 	defer auditLogger.Stop()
 
-	// 6. Create the gRPC Server and register the Bouncer Engine service
-	grpcServer := grpc.NewServer()
+	// 6. Create the gRPC Server and register the Bouncer Engine service.
+	// The unary interceptor records authz_evaluations_total and
+	// authz_evaluation_duration_seconds for every CheckAccess call.
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(metrics.UnaryInterceptor))
 	authzServer := server.NewAuthzServer(abacEngine, policyStore, auditLogger)
 	pb.RegisterAuthorizationServiceServer(grpcServer, authzServer)
+
+	// 6b. Serve the Prometheus /metrics endpoint on a separate HTTP port so
+	// scrapers never touch the gRPC listener.
+	metricsAddr := ":9090"
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+			slog.Error("metrics server stopped", "error", err)
+		}
+	}()
+	slog.Info("Prometheus metrics endpoint listening", "addr", metricsAddr)
 
 	// 7. Start serving live network traffic
 	slog.Info("gRPC server actively listening for authorization checks", "port", port)

@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # All three services share the compose `bouncer-net` bridge network, so
+  # Prometheus resolves the engine by service name. No host.docker.internal.
+  - job_name: bouncer-engine
+    static_configs:
+      - targets: ["bouncer-engine:9090"]
+        labels:
+          service: bouncer-engine

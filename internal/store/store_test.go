@@ -16,6 +16,34 @@ func countPolicies(t *testing.T, s *PolicyStore) int {
 	return len(snap.Allow) + len(snap.Deny)
 }
 
+func TestPolicyStore_Count(t *testing.T) {
+	s := NewPolicyStore()
+
+	if got := s.Count(); got != 0 {
+		t.Fatalf("expected 0 policies on fresh store, got %d", got)
+	}
+
+	s.UpsertPolicy(Policy{ID: "pol-a", Access: AccessAllow})
+	s.UpsertPolicy(Policy{ID: "pol-b", Access: AccessDeny})
+	s.UpsertPolicy(Policy{ID: "pol-c", Access: AccessAllow})
+
+	if got := s.Count(); got != 3 {
+		t.Fatalf("expected 3 policies after upserts, got %d", got)
+	}
+
+	// Re-upserting an existing ID (even with a flipped access mode) must not
+	// inflate the count: the opposite table evicts the stale entry first.
+	s.UpsertPolicy(Policy{ID: "pol-a", Access: AccessDeny})
+	if got := s.Count(); got != 3 {
+		t.Fatalf("expected 3 policies after access-mode flip, got %d", got)
+	}
+
+	s.DeletePolicy("pol-b")
+	if got := s.Count(); got != 2 {
+		t.Fatalf("expected 2 policies after delete, got %d", got)
+	}
+}
+
 func TestPolicyStore_ConcurrentReadWrite(t *testing.T) {
 	store := NewPolicyStore()
 
