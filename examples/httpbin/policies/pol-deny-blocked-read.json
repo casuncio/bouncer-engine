@@ -1,0 +1,16 @@
+{
+  "id": "pol-deny-blocked-read",
+  "description": "Deny READ to any principal whose roles include 'blocked'. Deny policies override allow policies in bouncer-engine.",
+  "access": "DENY",
+  "target": {
+    "resource_type": "httpbin",
+    "action": "READ"
+  },
+  "conditions": [
+    {
+      "attribute": "principal.role",
+      "operator": "CONTAINS_ANY",
+      "value": ["blocked"]
+    }
+  ]
+}

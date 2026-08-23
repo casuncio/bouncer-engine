@@ -1,0 +1,16 @@
+{
+  "id": "pol-allow-admin-write",
+  "description": "Allow WRITE only to principals whose role set is exactly ['admin']. EQUALS compares the full multi-value set.",
+  "access": "ALLOW",
+  "target": {
+    "resource_type": "httpbin",
+    "action": "WRITE"
+  },
+  "conditions": [
+    {
+      "attribute": "principal.role",
+      "operator": "EQUALS",
+      "value": ["admin"]
+    }
+  ]
+}

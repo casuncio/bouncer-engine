@@ -1,0 +1,16 @@
+{
+  "id": "pol-allow-staff-read",
+  "description": "Allow READ to staff principals. Matches when principal.role contains 'admin' or 'user'.",
+  "access": "ALLOW",
+  "target": {
+    "resource_type": "httpbin",
+    "action": "READ"
+  },
+  "conditions": [
+    {
+      "attribute": "principal.role",
+      "operator": "CONTAINS_ANY",
+      "value": ["admin", "user"]
+    }
+  ]
+}

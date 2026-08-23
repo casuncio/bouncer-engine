@@ -1,0 +1,55 @@
+# bouncer-engine HelloWorld: safeguarding httpbin.
+#
+# Three services on one user-defined bridge network. In-compose DNS means the
+# PEP reaches the engine as bouncer-engine:50051 and proxies to http://httpbin.
+# httpbin is intentionally NOT published to the host -- all external traffic
+# must go through the PEP (bouncer-pep on :8080), which enforces the engine's
+# decisions.
+#
+# Host port layout:
+#   :8080   bouncer-pep (HTTP front door; curl here)
+#   :50051  bouncer-engine gRPC API (for direct PDP calls / mock-client)
+#   :9090   bouncer-engine /metrics (raw Prometheus exposition)
+services:
+  bouncer-engine:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: bouncer-demo-engine
+    networks:
+      - bouncer-demo-net
+    ports:
+      - "50051:50051" # gRPC API (PDP)
+      - "9090:9090"   # /metrics
+    restart: unless-stopped
+
+  bouncer-pep:
+    build:
+      context: ../..
+      dockerfile: examples/httpbin/pep/Dockerfile
+    container_name: bouncer-demo-pep
+    networks:
+      - bouncer-demo-net
+    ports:
+      - "8080:8080" # HTTP front door
+    volumes:
+      - ./policies:/policies:ro
+    environment:
+      BOUNCER_ENGINE_ADDR: bouncer-engine:50051
+      HTTPBIN_TARGET: http://httpbin
+      PEP_LISTEN_ADDR: ":8080"
+      POLICIES_DIR: /policies
+    depends_on:
+      - bouncer-engine
+    restart: unless-stopped
+
+  httpbin:
+    image: kong/httpbin:latest
+    container_name: bouncer-demo-httpbin
+    networks:
+      - bouncer-demo-net
+    restart: unless-stopped
+
+networks:
+  bouncer-demo-net:
+    driver: bridge
