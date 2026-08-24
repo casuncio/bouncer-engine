@@ -1,0 +1,21 @@
+{
+  "id": "pol-allow-finance-write",
+  "description": "Allow WRITE to /anything/finance/* only to principals who hold BOTH 'admin' and 'finance'. Demonstrates a multi-condition ABAC rule combining a resource attribute (path REGEX) with a principal attribute (role CONTAINS_ALL). carol (admin+finance) is granted; alice (admin only) is denied. The /anything/finance/ prefix uses httpbin's catch-all endpoint, which stands in for a real finance service's routes.",
+  "access": "ALLOW",
+  "target": {
+    "resource_type": "httpbin",
+    "action": "WRITE"
+  },
+  "conditions": [
+    {
+      "attribute": "resource.path",
+      "operator": "REGEX",
+      "value": ["^/anything/finance/"]
+    },
+    {
+      "attribute": "principal.role",
+      "operator": "CONTAINS_ALL",
+      "value": ["admin", "finance"]
+    }
+  ]
+}

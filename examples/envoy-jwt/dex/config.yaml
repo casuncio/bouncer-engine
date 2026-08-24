@@ -1,0 +1,74 @@
+# Dex configuration for the bouncer-engine JWT demo.
+#
+# Dex is the OIDC Identity Provider. It issues RS256-signed id_tokens that
+# Envoy's jwt_authn filter verifies against the JWKS served at http://dex:5556/keys.
+#
+# This is a dev-only config: in-memory storage, password-based login via the
+# local connector (no browser flow required), and a single public client.
+#
+# Users (passwordConnector: local, password = first name):
+#   alice@bouncer.dev    password: alice     sub: local:...0001
+#   bob@bouncer.dev      password: bob       sub: local:...0002
+#   carol@bouncer.dev    password: carol     sub: local:...0003
+#   mallory@bouncer.dev  password: mallory   sub: local:...0004
+#
+# IMPORTANT: Dex's local connector does NOT emit a `groups` claim on the
+# id_token (it only populates sub/email/name/email_verified). The demo's
+# bouncer-extauthz adapter therefore performs claim enrichment at the PEP:
+# it maps the verified `email` to the demo's role vocabulary. With a real
+# upstream connector (LDAP, GitHub, Keycloak) Dex would emit `groups`
+# directly and the adapter would use them with zero code change. See the
+# example README for the full rationale.
+#
+# Tokens are minted via the OAuth2 password grant (see scripts/get-token.sh):
+#   curl -X POST http://localhost:5556/token \
+#     -d grant_type=password -d client_id=bouncer-demo \
+#     -d username=alice@bouncer.dev -d password=alice \
+#     -d scope="openid profile email"
+issuer: http://dex:5556
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+telemetry:
+  http: 0.0.0.0:5558
+
+# Password grant + skip the interactive approval screen (no browser needed).
+oauth2:
+  skipApproval: true
+  passwordConnector: local
+
+staticClients:
+- id: bouncer-demo
+  public: true
+  name: Bouncer Engine Demo
+  redirectURIs:
+  - http://localhost:8080/callback
+
+# No `connectors:` block: with enablePasswordDB: true below, the local password
+# DB is the sole auth method. (Dex v2.41+ removed the explicit `type: local`
+# connector entry -- `enablePasswordDB` is now the only knob needed.)
+enablePasswordDB: true
+
+# bcrypt hashes generated with golang.org/x/crypto/bcrypt (DefaultCost).
+# password == username for each demo user, to keep the walkthrough memorable.
+staticPasswords:
+- email: alice@bouncer.dev
+  hash: "$2a$10$BrbWc97XvL30J5icY.d1Je45WZwTidGXVoc90Q5glqz8XPcgmJyE6"
+  username: alice
+  userID: "00000000-0000-0000-0000-000000000001"
+- email: bob@bouncer.dev
+  hash: "$2a$10$h6HR4kX1PiMrKEmX7vnJQOaKPMBpsTtHTaNrsFru1gLPANTlTVlra"
+  username: bob
+  userID: "00000000-0000-0000-0000-000000000002"
+- email: carol@bouncer.dev
+  hash: "$2a$10$yjr0Fbc1T3EFOtE3mqfGc.CXUrwhrAY4u0PHblKyrL5uRFCDZAab2"
+  username: carol
+  userID: "00000000-0000-0000-0000-000000000003"
+- email: mallory@bouncer.dev
+  hash: "$2a$10$1Wwu6Vu5tbvS.AIFM/pi.u5fRdECMm7TNwATYdtvvzA2zKSdtlhy."
+  username: mallory
+  userID: "00000000-0000-0000-0000-000000000004"

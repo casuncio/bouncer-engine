@@ -1,0 +1,133 @@
+# Envoy configuration for the bouncer-engine JWT demo.
+#
+# Request path:
+#   1. jwt_authn filter verifies the Bearer JWT against Dex's JWKS
+#      (issuer http://dex:5556). On failure the request is rejected with 401
+#      before it ever reaches the upstream or the ext_authz adapter.
+#   2. jwt_authn forwards the verified payload to downstream filters as the
+#      base64url header `x-jwt-payload` (forward_payload_header).
+#   3. ext_authz calls bouncer-extauthz:9191 (Authorization/Check). The adapter
+#      decodes the payload header (NO crypto -- Envoy already verified it),
+#      maps claims to a bouncer-engine CheckAccess call, and returns
+#      OkResponse (allow) / DeniedResponse (deny / fail-closed).
+#   4. On allow, the request is routed to the httpbin cluster (internal only).
+#
+# failure_mode_allow: false  -> if the adapter is unreachable, Envoy fails
+# closed (503), never forwarding an unauthorized request to httpbin.
+#
+# Admin interface is bound to :9901 for introspection; not published to host.
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
+
+static_resources:
+  listeners:
+  - name: listener_http
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          stream_idle_timeout: 10s
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: httpbin
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: httpbin
+                  timeout: 15s
+          http_filters:
+          - name: envoy.filters.http.jwt_authn
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+              providers:
+                dex:
+                  issuer: http://dex:5556
+                  audiences:
+                  - bouncer-demo
+                  forward_payload_header: x-jwt-payload
+                  remote_jwks:
+                    cache_duration: 300s
+                    http_uri:
+                      uri: http://dex:5556/keys
+                      cluster: dex
+                      timeout: 5s
+              rules:
+              # Everything requires a verified Dex JWT. If you wanted to
+              # exclude a health endpoint, add a match.prefix rule with
+              # requires: { allow_missing_or_failed: {} } ahead of this one.
+              - match:
+                  prefix: "/"
+                requires:
+                  provider_name: dex
+          - name: envoy.filters.http.ext_authz
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+              transport_api_version: V3
+              failure_mode_allow: false
+              with_request_body:
+                max_request_bytes: 4096
+                pack_as_bytes: true
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: bouncer-extauthz
+                timeout: 2s
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: httpbin
+    type: STRICT_DNS
+    connect_timeout: 5s
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: httpbin
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: httpbin
+                port_value: 80
+
+  - name: dex
+    type: STRICT_DNS
+    connect_timeout: 5s
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: dex
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: dex
+                port_value: 5556
+
+  - name: bouncer-extauthz
+    type: STRICT_DNS
+    connect_timeout: 5s
+    lb_policy: ROUND_ROBIN
+    http2_protocol_options: {}
+    load_assignment:
+      cluster_name: bouncer-extauthz
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: bouncer-extauthz
+                port_value: 9191

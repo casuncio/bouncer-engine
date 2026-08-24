@@ -1,0 +1,80 @@
+# bouncer-engine production-style demo: JWT authn (Dex) + Envoy PEP + ABAC PDP.
+#
+# Five services on one user-defined bridge network. In-compose DNS means each
+# service reaches the others by name. httpbin is intentionally NOT published to
+# the host: the only way in is Envoy on :8080, which verifies the JWT (against
+# Dex's JWKS) and enforces bouncer-engine's decisions via the ext_authz adapter.
+#
+# Host port layout:
+#   :8080   envoy           HTTP front door (curl here with a Bearer JWT)
+#   :5556   dex             OIDC IdP (token endpoint + JWKS)
+#   :50051  bouncer-engine  gRPC API (PDP)
+#   :9090   bouncer-engine  /metrics (raw Prometheus exposition)
+services:
+  dex:
+    image: dexidp/dex:latest
+    container_name: bouncer-jwt-dex
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    networks:
+      - bouncer-jwt-net
+    restart: unless-stopped
+
+  bouncer-engine:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: bouncer-jwt-engine
+    networks:
+      - bouncer-jwt-net
+    ports:
+      - "50051:50051" # gRPC API (PDP)
+      - "9090:9090"   # /metrics
+    restart: unless-stopped
+
+  bouncer-extauthz:
+    build:
+      context: ../..
+      dockerfile: examples/envoy-jwt/extauthz/Dockerfile
+    container_name: bouncer-jwt-extauthz
+    networks:
+      - bouncer-jwt-net
+    volumes:
+      - ./policies:/policies:ro
+    environment:
+      BOUNCER_ENGINE_ADDR: bouncer-engine:50051
+      EXTAUTHZ_LISTEN_ADDR: ":9191"
+      POLICIES_DIR: /policies
+    depends_on:
+      - bouncer-engine
+    restart: unless-stopped
+
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: bouncer-jwt-envoy
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - bouncer-jwt-net
+    depends_on:
+      - dex
+      - bouncer-extauthz
+      - httpbin
+    restart: unless-stopped
+
+  httpbin:
+    image: kong/httpbin:latest
+    container_name: bouncer-jwt-httpbin
+    networks:
+      - bouncer-jwt-net
+    restart: unless-stopped
+
+networks:
+  bouncer-jwt-net:
+    driver: bridge

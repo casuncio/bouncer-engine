@@ -1,0 +1,21 @@
+{
+  "id": "pol-allow-admin-write",
+  "description": "Allow WRITE to standard endpoints only to principals whose role set is exactly ['admin']. EQUALS compares the full multi-value set, so carol (admin+finance) is NOT granted write by this policy -- she is scoped to /anything/finance/* via pol-allow-finance-write. The path REGEX restricts this to httpbin's standard write endpoints so it doesn't shadow the finance policy.",
+  "access": "ALLOW",
+  "target": {
+    "resource_type": "httpbin",
+    "action": "WRITE"
+  },
+  "conditions": [
+    {
+      "attribute": "resource.path",
+      "operator": "REGEX",
+      "value": ["^/(post|put|patch|delete)$"]
+    },
+    {
+      "attribute": "principal.role",
+      "operator": "EQUALS",
+      "value": ["admin"]
+    }
+  ]
+}
