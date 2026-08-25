@@ -55,18 +55,75 @@ docker compose -f deploy/observability/docker-compose.yml up -d --build
 
 The Grafana "Bouncer Engine" dashboard and Prometheus datasource are auto-provisioned on first boot — no manual UI import required.
 
-### Generate sample traffic
+## Examples
+
+End-to-end demos of Bouncer Engine acting as a **Policy Decision Point (PDP)** behind a Policy Enforcement Point (PEP):
+
+* [examples/httpbin](examples/httpbin) — the "hello world": a hand-written Go reverse proxy (the PEP) in front of [httpbin](https://github.com/kong/httpbin), calling `CheckAccess` on every request. Three containers, no external dependencies.
+* [examples/envoy-jwt](examples/envoy-jwt) — the production-shaped step up: **Envoy** verifies JWTs issued by **Dex** (OIDC) at the edge and enforces the engine's ABAC decisions via Envoy's external authorization filter, giving a clean authn ↔ authz split.
+
+## Testing
+
+### Unit tests
+```bash
+make test   # go test -v -race -cover ./...
+```
+
+### Core engine benchmarks
+```bash
+make bench  # engine benchmarks, constrained to 1 vCPU
+```
+
+### Sample traffic
 ```bash
 go run ./cmd/mock-client   # streams a policy and performs one CheckAccess
 ```
 
-### Tests & benchmarks
+### Load testing (k6)
+A k6 gRPC load test lives in `loadtest/`. The `make loadtest` target first runs a Go-based policy seeder (`loadtest/seed/`) that pushes three test policies via `StreamPolicyUpdates`, then launches k6 against `CheckAccess` with a mix of allow/deny fixtures exercising every operator (`CONTAINS_ANY`, `IN_CIDR`, `BETWEEN`, `EQUALS`, explicit-deny, implicit-deny). Requires the engine to be running (`make build && ./bin/bouncer-engine` or the Docker stack).
+
 ```bash
-make test   # go test -v -race -cover ./...
-make bench  # engine benchmarks, constrained to 1 vCPU
+make loadtest          # seeds policies, then runs k6 (must be installed locally)
+make loadtest-docker   # seeds policies locally, then runs k6 via grafana/k6 image
+make loadtest-smoke    # quick 50-RPS baseline-only check
 ```
 
-## 🚀 Performance Benchmarks (Optimized)
+The run reports **p50 / p90 / p95 / p99** for both end-to-end gRPC latency (`grpc_req_duration`) and engine-reported evaluation time (`engine_eval_time_ns`, the same value the Prometheus histogram captures). Thresholds that fail the run:
+
+| Metric                  | Threshold        | Meaning                              |
+| :---                    | :---             | :---                                 |
+| `grpc_req_duration`     | p(99) < 10 ms    | End-to-end gRPC round-trip           |
+| `engine_eval_time_ns`   | p(99) < 2 ms     | Engine's own evaluation (README SLA) |
+| `checks`                | rate > 99.5 %    | Status + decision-correctness checks |
+
+**Configuration via environment variables:**
+
+| Variable                 | Default             | Description                                  |
+| :---                     | :---                | :---                                         |
+| `BOUNCER_TARGET`         | `localhost:50051`   | Engine gRPC address (used by both seeder and k6) |
+| `BOUNCER_BASELINE_RPS`   | `1000`              | Target RPS for the baseline scenario         |
+| `BOUNCER_STRESS_RPS`     | `10000`             | Target RPS for the stress scenario           |
+| `BOUNCER_SKIP_BASELINE`  | `false`             | Set `true` to run only the stress scenario   |
+| `BOUNCER_SKIP_STRESS`    | `false`             | Set `true` to run only the baseline scenario |
+
+Example: stress-only at 5 000 RPS against a remote engine:
+```bash
+BOUNCER_TARGET=engine.internal:50051 BOUNCER_STRESS_RPS=5000 \
+  BOUNCER_SKIP_BASELINE=true k6 run loadtest/checkaccess.js
+```
+
+#### CI integration
+The load test runs automatically in GitHub Actions via `.github/workflows/loadtest.yml`:
+
+| Trigger            | Profile  | Purpose                              |
+| :---               | :---     | :---                                 |
+| `pull_request`     | smoke    | Fast PR gate (~2 min, 50 RPS)        |
+| nightly `schedule` | baseline | Regression signal (1 000 RPS, 1 min) |
+| `workflow_dispatch`| chosen   | On-demand smoke / baseline / full     |
+
+The workflow builds the engine, starts it in the background, waits for `:50051` readiness, seeds policies, runs k6, and uploads `loadtest-results.json` + `engine.log` as artifacts. A threshold breach (E2E p99 ≥ 10 ms, engine eval p99 ≥ 2 ms, or check failures) fails the run. The manual dispatch exposes `profile`, `baseline_rps`, and `stress_rps` inputs.
+
+## Performance Benchmarks (Optimized)
 
 Bouncer Engine is strictly engineered for high-throughput, low-latency authorization checks. The following benchmarks represent our **optimized, zero-allocation** evaluation path running on a single CPU thread (`-cpu=1`) to simulate strict production container constraints.
 
@@ -93,7 +150,7 @@ Bouncer Engine is strictly engineered for high-throughput, low-latency authoriza
 * **Sub-Millisecond Latency:** A complete multi-condition policy evaluation finishes in **~0.0015 ms**, safely clearing the < 2 ms latency threshold.
 * **Throughput Headroom:** With an average execution speed of 1,495 ns/op, a single constrained CPU core can theoretically sustain over **668,000 evaluations per second**, easily exceeding the > 10,000 RPS requirement while leaving ample headroom for gRPC networking and asynchronous audit logging.
 
-## 📊 Observability
+## Observability
 
 Bouncer Engine exposes Prometheus metrics via a gRPC unary interceptor in `internal/metrics`. Instrumentation lives in the gRPC seam, so the zero-allocation evaluation path in `internal/engine` stays untouched (benchmarks still report `0 allocs/op`).
 
