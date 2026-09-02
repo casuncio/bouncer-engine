@@ -1,0 +1,95 @@
+name: Load Test
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Nightly at 03:00 UTC — baseline regression signal beyond the PR smoke gate.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Load profile"
+        type: choice
+        default: smoke
+        options: [ smoke, baseline, full ]
+      baseline_rps:
+        description: "Baseline scenario target RPS"
+        default: "1000"
+      stress_rps:
+        description: "Stress scenario target RPS"
+        default: "10000"
+
+permissions:
+  contents: read
+
+jobs:
+  loadtest:
+    name: k6 gRPC Load Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Resolve load profile
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            profile="smoke"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            profile="baseline"
+          else
+            profile="${{ github.event.inputs.profile || 'smoke' }}"
+          fi
+          echo "Selected profile: $profile"
+          case "$profile" in
+            smoke)
+              echo "BOUNCER_BASELINE_RPS=50"    >> "$GITHUB_ENV"
+              echo "BOUNCER_SKIP_STRESS=true"    >> "$GITHUB_ENV"
+              ;;
+            baseline)
+              echo "BOUNCER_BASELINE_RPS=${{ github.event.inputs.baseline_rps || '1000' }}" >> "$GITHUB_ENV"
+              echo "BOUNCER_SKIP_STRESS=true"    >> "$GITHUB_ENV"
+              ;;
+            full)
+              echo "BOUNCER_BASELINE_RPS=${{ github.event.inputs.baseline_rps || '1000' }}"  >> "$GITHUB_ENV"
+              echo "BOUNCER_STRESS_RPS=${{ github.event.inputs.stress_rps || '10000' }}"      >> "$GITHUB_ENV"
+              echo "BOUNCER_SKIP_STRESS=false"   >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      # `make loadtest` builds the engine, starts it in the background, waits for
+      # :50051 readiness, seeds policies, runs k6, and stops the engine on exit
+      # (trap). K6_OUT writes the JSON results for artifact upload; engine.log is
+      # captured for diagnostics.
+      - name: Run load test
+        run: make loadtest K6_OUT=loadtest-results.json
+
+      - name: Upload k6 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: loadtest-results.json
+          if-no-files-found: ignore
+
+      - name: Upload engine log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-log
+          path: engine.log
+          if-no-files-found: ignore
+
+      - name: Stop engine
+        if: always()
+        run: make engine-stop
