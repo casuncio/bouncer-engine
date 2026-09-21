@@ -36,15 +36,18 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/casuncio/bouncer-engine/internal/subscriber"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
-	engineAddr     = envOr("BOUNCER_ENGINE_ADDR", "bouncer-engine:50051")
-	listenAddr     = envOr("EXTAUTHZ_LISTEN_ADDR", ":9191")
-	policiesDir    = envOr("POLICIES_DIR", "/policies")
-	payloadHeader  = strings.ToLower(envOr("JWT_PAYLOAD_HEADER", "x-jwt-payload"))
-	engineTimeout  = 2 * time.Second
+	engineAddr    = envOr("BOUNCER_ENGINE_ADDR", "bouncer-engine:50051")
+	redisAddr     = envOr("REDIS_ADDR", subscriber.DefaultAddr)
+	listenAddr    = envOr("EXTAUTHZ_LISTEN_ADDR", ":9191")
+	policiesDir   = envOr("POLICIES_DIR", "/policies")
+	payloadHeader = strings.ToLower(envOr("JWT_PAYLOAD_HEADER", "x-jwt-payload"))
+	engineTimeout = 2 * time.Second
 )
 
 func main() {
@@ -59,7 +62,9 @@ func main() {
 	defer conn.Close()
 	client := pb.NewAuthorizationServiceClient(conn)
 
-	seedPolicies(context.Background(), client, policiesDir)
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer rdb.Close()
+	seedPolicies(context.Background(), rdb, policiesDir)
 
 	srv := &extAuthzServer{client: client}
 
@@ -348,7 +353,7 @@ func lookupHeader(headers map[string]string, key string) (string, bool) {
 
 // ---- policy seeding (mirrors examples/httpbin/pep/main.go) ----
 
-func seedPolicies(ctx context.Context, client pb.AuthorizationServiceClient, dir string) {
+func seedPolicies(ctx context.Context, rdb *redis.Client, dir string) {
 	files := loadPolicyFiles(dir)
 	if len(files) == 0 {
 		slog.Warn("no policy files found; engine will deny everything until policies are loaded", "dir", dir)
@@ -358,23 +363,11 @@ func seedPolicies(ctx context.Context, client pb.AuthorizationServiceClient, dir
 	backoff := 500 * time.Millisecond
 	maxBackoff := 5 * time.Second
 	for attempt := 1; ; attempt++ {
-		stream, err := client.StreamPolicyUpdates(ctx)
-		if err != nil {
-			slog.Warn("failed to open policy stream, retrying", "attempt", attempt, "error", err)
-			sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
 		failed := false
 		for _, f := range files {
-			if err := stream.Send(&pb.PolicyUpdateRequest{
-				PolicyId:   f.id,
-				Action:     "UPSERT",
-				PolicyJson: f.json,
-			}); err != nil {
-				slog.Warn("failed to send policy update, retrying",
-					"policy_id", f.id, "attempt", attempt, "error", err)
+			if err := subscriber.Publish(ctx, rdb, subscriber.StreamKey, subscriber.ActionUpsert, f.id, f.json); err != nil {
+				slog.Warn("failed to publish policy update, retrying",
+					"policy_id", f.id, "attempt", attempt, "redis", redisAddr, "error", err)
 				failed = true
 				break
 			}
@@ -385,17 +378,10 @@ func seedPolicies(ctx context.Context, client pb.AuthorizationServiceClient, dir
 			continue
 		}
 
-		resp, err := stream.CloseAndRecv()
-		if err != nil {
-			slog.Warn("failed to close policy stream, retrying", "attempt", attempt, "error", err)
-			sleep(backoff)
-			backoff = min(backoff*2, maxBackoff)
-			continue
-		}
-
 		slog.Info("policies seeded into bouncer engine",
 			"count", len(files),
-			"active_policy_count", resp.GetActivePolicyCount(),
+			"stream", subscriber.StreamKey,
+			"redis", redisAddr,
 		)
 		return
 	}

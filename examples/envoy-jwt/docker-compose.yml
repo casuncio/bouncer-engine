@@ -1,16 +1,27 @@
 # bouncer-engine production-style demo: JWT authn (Dex) + Envoy PEP + ABAC PDP.
 #
-# Five services on one user-defined bridge network. In-compose DNS means each
+# Six services on one user-defined bridge network. In-compose DNS means each
 # service reaches the others by name. httpbin is intentionally NOT published to
 # the host: the only way in is Envoy on :8080, which verifies the JWT (against
 # Dex's JWKS) and enforces bouncer-engine's decisions via the ext_authz adapter.
+# Policy updates are published to Redis; the engine subscribes to that stream.
 #
 # Host port layout:
 #   :8080   envoy           HTTP front door (curl here with a Bearer JWT)
 #   :5556   dex             OIDC IdP (token endpoint + JWKS)
 #   :50051  bouncer-engine  gRPC API (PDP)
 #   :9090   bouncer-engine  /metrics (raw Prometheus exposition)
+#   :6379   redis           policy update stream
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: bouncer-jwt-redis
+    networks:
+      - bouncer-jwt-net
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   dex:
     image: dexidp/dex:latest
     container_name: bouncer-jwt-dex
@@ -33,6 +44,10 @@ services:
     ports:
       - "50051:50051" # gRPC API (PDP)
       - "9090:9090"   # /metrics
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - redis
     restart: unless-stopped
 
   bouncer-extauthz:
@@ -48,7 +63,9 @@ services:
       BOUNCER_ENGINE_ADDR: bouncer-engine:50051
       EXTAUTHZ_LISTEN_ADDR: ":9191"
       POLICIES_DIR: /policies
+      REDIS_ADDR: redis:6379
     depends_on:
+      - redis
       - bouncer-engine
     restart: unless-stopped
 

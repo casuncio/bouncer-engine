@@ -24,18 +24,19 @@ request to httpbin only on `allow`, and returns `403` on `deny`.
 
 bouncer-engine is a **PDP**: it decides, it does not enforce. To *safeguard* a
 service you also need a **PEP** that intercepts traffic and asks the PDP. This
-example shows that split concretely, with three containers and zero external
+example shows that split concretely, with a few containers and no host
 dependencies beyond Docker.
 
 ## Architecture
 
 | Container            | Role | Image / build              | Listens on (in-compose) | Host port |
 | :---                 | :--- | :---                       | :---                    | :---      |
+| `redis`              | policy bus | `redis:7-alpine` | `:6379` | `6379` |
 | `bouncer-engine`     | PDP  | built from repo `Dockerfile` | `:50051` gRPC, `:9090` metrics | `50051`, `9090` |
 | `bouncer-pep`        | PEP  | built from `examples/httpbin/pep/Dockerfile` | `:8080` HTTP | `8080` |
 | `httpbin`            | protected service | `kong/httpbin:latest` | `:80` (internal only) | *not published* |
 
-All three live on one user-defined bridge network (`bouncer-demo-net`), so they
+All four live on one user-defined bridge network (`bouncer-demo-net`), so they
 address each other by service name — no host networking, no `host.docker.internal`.
 httpbin is intentionally **not** published to the host: the only way in is through
 the PEP on `:8080`, which is the whole point.
@@ -45,7 +46,7 @@ the PEP on `:8080`, which is the whole point.
 ```
 examples/httpbin/
 ├─ README.md                       # this file
-├─ docker-compose.yml              # 3 services on bouncer-demo-net
+├─ docker-compose.yml              # 4 services on bouncer-demo-net
 ├─ policies/                       # loaded into the engine by the PEP at startup
 │  ├─ pol-deny-blocked-read.json   # DENY httpbin/READ  role CONTAINS_ANY ["blocked"]
 │  ├─ pol-allow-staff-read.json    # ALLOW httpbin/READ  role CONTAINS_ANY ["admin","user"]
@@ -57,11 +58,11 @@ examples/httpbin/
 
 ## How the PEP works
 
-1. **Startup** — dials `bouncer-engine:50051` over gRPC (with retry/backoff, since
-   `depends_on` only waits for the container to *start*, not for gRPC to *listen*),
-   opens the `StreamPolicyUpdates` client stream, pushes every `*.json` file in
-   `/policies` as an `UPSERT`, and closes the stream. The engine's in-memory store
-   is now seeded. Then it serves HTTP on `:8080`.
+1. **Startup** — publishes every `*.json` file in `/policies` as an `UPSERT` on
+   the Redis stream `authpolicy:events` (retrying until Redis accepts the write).
+   The engine subscribes to that stream and loads the policies into its in-memory
+   store, replaying the stream from the beginning if it starts late. The PEP then
+   dials `bouncer-engine:50051` for `CheckAccess` and serves HTTP on `:8080`.
 2. **Per request** — builds a `CheckAccessRequest` from the inbound HTTP request:
    - `principal_id` ← `X-User` header (default `anonymous`)
    - `principal.role` ← every `X-Role` header value (multi-valued ABAC attribute)
@@ -96,16 +97,16 @@ the build cache. Check readiness:
 
 ```bash
 docker compose -f examples/httpbin/docker-compose.yml logs bouncer-pep | grep "policies seeded"
-# -> {"msg":"policies seeded into bouncer engine","count":3,"active_policy_count":3,...}
+# -> {"msg":"policies seeded into bouncer engine","count":3,"stream":"authpolicy:events",...}
 
-# Cross-check the live policy gauge (should be 3):
+# Cross-check the live policy gauge (should be 3 once the engine consumes the stream):
 curl -s localhost:9090/metrics | grep '^authz_policy_count '
 # -> authz_policy_count 3
 ```
 
-The `active_policy_count` in the PEP log comes straight from the engine's
-`StreamPolicyUpdates` acknowledgement, which reports the live store count after
-the session's upserts have been applied.
+The PEP log reports how many policies it published. The live store count is the
+`authz_policy_count` gauge, which updates after the engine's Redis subscriber
+applies the stream.
 
 ## Walkthrough
 
@@ -223,6 +224,7 @@ The PEP reads these (defaults shown), all set for you in `docker-compose.yml`:
 | `HTTPBIN_TARGET`      | `http://httpbin`          | Upstream the PEP proxies to on `allow`    |
 | `PEP_LISTEN_ADDR`     | `:8080`                   | Where the PEP listens for HTTP traffic    |
 | `POLICIES_DIR`        | `/policies`               | Directory of `*.json` policies to seed    |
+| `REDIS_ADDR`          | `localhost:6379`          | Redis address the PEP publishes policy updates to |
 
 ## Teardown
 
@@ -239,11 +241,12 @@ volumes. This demo stack uses no named volumes, so `down` leaves nothing behind.
   mid-request. Check `docker compose ... logs bouncer-engine`. The PEP fails
   *closed* in this case (returns 503, never proxies).
 * **Everything returns `403` with `reason: "Implict Deny: No matching polices"`**
-  — the policies weren't seeded. Check the PEP log for `policies seeded`; the
-  `active_policy_count` there should equal the number of `*.json` files in
-  `policies/`. If the engine restarted after the PEP started, restart the PEP so
-  it re-seeds: `docker compose -f examples/httpbin/docker-compose.yml restart bouncer-pep`.
-* **Port already in use** (`8080`/`50051`/`9090`) — another stack (e.g. the
+  — the policies weren't applied. Check the PEP log for `policies seeded`
+  (`count` should equal the number of `*.json` files in `policies/`) and the
+  engine gauge `authz_policy_count`. The engine replays the Redis stream on
+  startup, so an engine restart does not require re-seeding. If Redis was wiped,
+  restart the PEP: `docker compose -f examples/httpbin/docker-compose.yml restart bouncer-pep`.
+* **Port already in use** (`8080`/`50051`/`9090`/`6379`) — another stack (e.g. the
   observability one) is using them. Stop it first, or remap the host ports in
   `docker-compose.yml`.
 * **Build fails on `go build ./examples/httpbin/pep`** — ensure generated stubs

@@ -1,4 +1,4 @@
-# Bouncer Engine observability stack: engine + Prometheus + Grafana, all in
+# Bouncer Engine observability stack: engine + Redis + Prometheus + Grafana, all in
 # one user-defined bridge network. In-compose DNS means services address each
 # other by service name (e.g. prometheus scrapes bouncer-engine:9090), so no
 # host.docker.internal and no host networking required. Works on Linux,
@@ -7,9 +7,19 @@
 # Host port layout:
 #   :50051  bouncer-engine gRPC API
 #   :9090   bouncer-engine /metrics (also reachable inside compose as bouncer-engine:9090)
+#   :6379   redis policy update stream (mock-publisher / external seeders)
 #   :9091   Prometheus web UI
 #   :3000   Grafana web UI (admin / admin)
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: bouncer-redis
+    networks:
+      - bouncer-net
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   bouncer-engine:
     build:
       context: ../..
@@ -18,8 +28,12 @@ services:
     networks:
       - bouncer-net
     ports:
-      - "50051:50051" # gRPC API (for mock-client / external callers)
+      - "50051:50051" # gRPC API (CheckAccess)
       - "9090:9090"   # /metrics (for direct curl; Prometheus uses internal DNS)
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - redis
     restart: unless-stopped
 
   prometheus:

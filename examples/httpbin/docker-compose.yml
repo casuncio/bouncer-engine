@@ -1,16 +1,26 @@
 # bouncer-engine HelloWorld: safeguarding httpbin.
 #
-# Three services on one user-defined bridge network. In-compose DNS means the
-# PEP reaches the engine as bouncer-engine:50051 and proxies to http://httpbin.
-# httpbin is intentionally NOT published to the host -- all external traffic
-# must go through the PEP (bouncer-pep on :8080), which enforces the engine's
-# decisions.
+# Four services on one user-defined bridge network. In-compose DNS means the
+# PEP reaches the engine as bouncer-engine:50051, publishes policies to redis,
+# and proxies to http://httpbin. httpbin is intentionally NOT published to the
+# host -- all external traffic must go through the PEP (bouncer-pep on :8080),
+# which enforces the engine's decisions.
 #
 # Host port layout:
 #   :8080   bouncer-pep (HTTP front door; curl here)
-#   :50051  bouncer-engine gRPC API (for direct PDP calls / mock-client)
+#   :50051  bouncer-engine gRPC API (CheckAccess)
 #   :9090   bouncer-engine /metrics (raw Prometheus exposition)
+#   :6379   redis (policy update stream)
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: bouncer-demo-redis
+    networks:
+      - bouncer-demo-net
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   bouncer-engine:
     build:
       context: ../..
@@ -21,6 +31,10 @@ services:
     ports:
       - "50051:50051" # gRPC API (PDP)
       - "9090:9090"   # /metrics
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - redis
     restart: unless-stopped
 
   bouncer-pep:
@@ -39,7 +53,9 @@ services:
       HTTPBIN_TARGET: http://httpbin
       PEP_LISTEN_ADDR: ":8080"
       POLICIES_DIR: /policies
+      REDIS_ADDR: redis:6379
     depends_on:
+      - redis
       - bouncer-engine
     restart: unless-stopped
 

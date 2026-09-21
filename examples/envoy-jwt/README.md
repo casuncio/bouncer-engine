@@ -56,10 +56,11 @@ Three production concerns the hello-world demo deliberately ignores:
 | `dex`                | IdP  | `dexidp/dex:latest`                        | `:5556` HTTP (token + JWKS)     | `5556`    |
 | `envoy`              | PEP  | `envoyproxy/envoy:v1.31-latest`            | `:8080` HTTP                    | `8080`    |
 | `bouncer-extauthz`   | adapter | built from `extauthz/Dockerfile`        | `:9191` gRPC (ext_authz)        | *not published* |
+| `redis`              | policy bus | `redis:7-alpine`                        | `:6379`                         | `6379`    |
 | `bouncer-engine`     | PDP  | built from repo `Dockerfile`               | `:50051` gRPC, `:9090` metrics  | `50051`, `9090` |
 | `httpbin`            | upstream | `kong/httpbin:latest`                  | `:80` (internal only)           | *not published* |
 
-All five live on one user-defined bridge network (`bouncer-jwt-net`), so they
+All six live on one user-defined bridge network (`bouncer-jwt-net`), so they
 address each other by service name. httpbin and the adapter are intentionally
 **not** published to the host: the only way in is Envoy on `:8080`.
 
@@ -68,7 +69,7 @@ address each other by service name. httpbin and the adapter are intentionally
 ```
 examples/envoy-jwt/
 ├─ README.md
-├─ docker-compose.yml          # 5 services on bouncer-jwt-net
+├─ docker-compose.yml          # 6 services on bouncer-jwt-net
 ├─ envoy/
 │  └─ envoy.yaml               # HCM: jwt_authn (Dex provider) + ext_authz gRPC + route→httpbin
 ├─ dex/
@@ -201,9 +202,9 @@ readiness — the adapter should have seeded 4 policies:
 
 ```bash
 docker compose -f examples/envoy-jwt/docker-compose.yml logs bouncer-extauthz | grep "policies seeded"
-# -> {"msg":"policies seeded into bouncer engine","count":4,"active_policy_count":4,...}
+# -> {"msg":"policies seeded into bouncer engine","count":4,"stream":"authpolicy:events",...}
 
-# Cross-check the live policy gauge (should be 4):
+# Cross-check the live policy gauge (should be 4 once the engine consumes the stream):
 curl -s localhost:9090/metrics | grep '^authz_policy_count '
 # -> authz_policy_count 4
 ```
@@ -331,6 +332,7 @@ The adapter reads these (defaults shown), all set for you in `docker-compose.yml
 | `BOUNCER_ENGINE_ADDR` | `bouncer-engine:50051`    | gRPC address of the bouncer-engine PDP    |
 | `EXTAUTHZ_LISTEN_ADDR`| `:9191`                   | Where the ext_authz gRPC server listens   |
 | `POLICIES_DIR`        | `/policies`               | Directory of `*.json` policies to seed    |
+| `REDIS_ADDR`          | `localhost:6379`          | Redis address the adapter publishes policy updates to |
 | `JWT_PAYLOAD_HEADER`  | `x-jwt-payload`           | Header Envoy attaches the verified payload to |
 
 ## Teardown
@@ -351,10 +353,11 @@ behind.
   http://localhost:5556/keys | jq '.keys | length'`. Envoy logs the jwt_authn
   rejection reason: `docker compose ... logs envoy | grep jwt`.
 * **`403` with `reason: "Implict Deny: No matching polices"` on every
-  request** — the policies weren't seeded. Check the adapter log for
-  `policies seeded`; `active_policy_count` should equal the number of
-  `*.json` files in `policies/`. If the engine restarted after the adapter
-  started, restart the adapter so it re-seeds:
+  request** — the policies weren't applied. Check the adapter log for
+  `policies seeded` (`count` should equal the number of `*.json` files in
+  `policies/`) and the engine gauge `authz_policy_count`. The engine replays
+  the Redis stream on startup, so an engine restart does not require
+  re-seeding. If Redis was wiped, restart the adapter:
   `docker compose -f examples/envoy-jwt/docker-compose.yml restart bouncer-extauthz`.
 * **`503` on every request** — the adapter can't reach the engine, or Envoy
   can't reach the adapter. Check `docker compose ... logs bouncer-extauthz`
@@ -367,7 +370,7 @@ behind.
   generated stubs exist at `pkg/gen/authzv1/`. They are committed; if
   missing, run `make gen` (requires [buf](https://buf.build)). The
   `go-control-plane` dependency is pulled by `go mod tidy`.
-* **Port already in use** (`8080`/`5556`/`50051`/`9090`) — another stack (e.g.
+* **Port already in use** (`8080`/`5556`/`50051`/`9090`/`6379`) — another stack (e.g.
   the httpbin or observability one) is using them. Stop it first, or remap
   the host ports in `docker-compose.yml`.
 
