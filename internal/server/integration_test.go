@@ -7,17 +7,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/casuncio/bouncer-engine/internal/audit"
 	"github.com/casuncio/bouncer-engine/internal/engine"
 	"github.com/casuncio/bouncer-engine/internal/server"
 	"github.com/casuncio/bouncer-engine/internal/store"
+	"github.com/casuncio/bouncer-engine/internal/subscriber"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func setupTestServer(t *testing.T) pb.AuthorizationServiceClient {
+type testEnv struct {
+	client pb.AuthorizationServiceClient
+	store  *store.PolicyStore
+	redis  *redis.Client
+}
+
+func setupTestServer(t *testing.T) *testEnv {
 	t.Helper()
+
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
 
 	policyStore := store.NewPolicyStore()
 	abacEngine := engine.New(policyStore)
@@ -25,13 +38,17 @@ func setupTestServer(t *testing.T) pb.AuthorizationServiceClient {
 	auditLogger.Start(2)
 	t.Cleanup(auditLogger.Stop)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go subscriber.NewPolicyUpdateSubscriber(subscriber.StreamKey, rdb, policyStore).Start(ctx)
+
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterAuthorizationServiceServer(grpcServer, server.NewAuthzServer(abacEngine, policyStore, auditLogger))
+	pb.RegisterAuthorizationServiceServer(grpcServer, server.NewAuthzServer(abacEngine, auditLogger))
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -45,40 +62,95 @@ func setupTestServer(t *testing.T) pb.AuthorizationServiceClient {
 		_ = conn.Close()
 	})
 
-	return pb.NewAuthorizationServiceClient(conn)
+	return &testEnv{
+		client: pb.NewAuthorizationServiceClient(conn),
+		store:  policyStore,
+		redis:  rdb,
+	}
 }
 
-// applyPolicyUpdates streams the given updates in a single session and asserts
-// the server acknowledges them.
-func applyPolicyUpdates(t *testing.T, client pb.AuthorizationServiceClient, updates ...*pb.PolicyUpdateRequest) {
+type policyUpdate struct {
+	id      string
+	action  string
+	json    string
+	invalid bool
+}
+
+// applyPolicyUpdates publishes the given updates to the Redis stream and waits
+// until the subscriber has applied every update that should change the store.
+func applyPolicyUpdates(t *testing.T, env *testEnv, updates ...policyUpdate) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := client.StreamPolicyUpdates(ctx)
-	if err != nil {
-		t.Fatalf("failed to open policy update stream: %v", err)
-	}
+	type expectation int
+	const (
+		expectPresent expectation = iota
+		expectAbsent
+		expectIgnore
+	)
+	expected := make(map[string]expectation, len(updates))
+
 	for _, update := range updates {
-		if err := stream.Send(update); err != nil {
-			t.Fatalf("failed to send policy update %q: %v", update.PolicyId, err)
+		if err := subscriber.Publish(ctx, env.redis, subscriber.StreamKey, update.action, update.id, update.json); err != nil {
+			t.Fatalf("failed to publish policy update %q: %v", update.id, err)
+		}
+		switch {
+		case update.action == subscriber.ActionDelete:
+			expected[update.id] = expectAbsent
+		case update.invalid:
+			if _, seen := expected[update.id]; !seen {
+				expected[update.id] = expectIgnore
+			}
+		default:
+			expected[update.id] = expectPresent
 		}
 	}
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		t.Fatalf("failed to close policy update stream: %v", err)
-	}
-	if !resp.GetSuccess() {
-		t.Fatalf("expected stream acknowledgement success=true, got false")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snap, err := env.store.ListActivePolicies(context.Background())
+		if err != nil {
+			t.Fatalf("failed to list policies: %v", err)
+		}
+		ids := make(map[string]struct{}, len(snap.Allow)+len(snap.Deny))
+		for _, p := range snap.Allow {
+			ids[p.ID] = struct{}{}
+		}
+		for _, p := range snap.Deny {
+			ids[p.ID] = struct{}{}
+		}
+
+		ready := true
+		for id, want := range expected {
+			_, found := ids[id]
+			switch want {
+			case expectPresent:
+				if !found {
+					ready = false
+				}
+			case expectAbsent:
+				if found {
+					ready = false
+				}
+			}
+		}
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for redis policy updates to apply; store has %d policies", len(ids))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func upsertPolicy(id string, access string, resourceType string, action string, conditions string) *pb.PolicyUpdateRequest {
-	return &pb.PolicyUpdateRequest{
-		PolicyId: id,
-		Action:   "UPSERT",
-		PolicyJson: `{
+func upsertPolicy(id string, access string, resourceType string, action string, conditions string) policyUpdate {
+	return policyUpdate{
+		id:     id,
+		action: subscriber.ActionUpsert,
+		json: `{
 			"id": "` + id + `",
 			"description": "integration test policy",
 			"access": "` + access + `",
@@ -88,10 +160,10 @@ func upsertPolicy(id string, access string, resourceType string, action string, 
 	}
 }
 
-func deletePolicy(id string) *pb.PolicyUpdateRequest {
-	return &pb.PolicyUpdateRequest{
-		PolicyId: id,
-		Action:   "DELETE",
+func deletePolicy(id string) policyUpdate {
+	return policyUpdate{
+		id:     id,
+		action: subscriber.ActionDelete,
 	}
 }
 
@@ -108,9 +180,9 @@ func checkAccess(client pb.AuthorizationServiceClient, principalID string, attrs
 }
 
 func TestIntegration_CheckAccess_DefaultDeny(t *testing.T) {
-	client := setupTestServer(t)
+	env := setupTestServer(t)
 
-	resp, err := checkAccess(client, "usr-1", map[string]*pb.AttributeValues{
+	resp, err := checkAccess(env.client, "usr-1", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"viewer"}},
 	}, "document", "READ")
 	if err != nil {
@@ -132,9 +204,9 @@ func TestIntegration_CheckAccess_DefaultDeny(t *testing.T) {
 }
 
 func TestIntegration_HotReload_And_ConcurrentAccess(t *testing.T) {
-	client := setupTestServer(t)
+	env := setupTestServer(t)
 
-	applyPolicyUpdates(t, client,
+	applyPolicyUpdates(t, env,
 		upsertPolicy("pol-integration-001", "ALLOW", "database", "WRITE",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["admin"]}]`),
 	)
@@ -151,7 +223,7 @@ func TestIntegration_HotReload_And_ConcurrentAccess(t *testing.T) {
 		go func(workerID int) {
 			defer wg.Done()
 			for j := 0; j < requestsPerWorker; j++ {
-				resp, reqErr := client.CheckAccess(ctx, &pb.CheckAccessRequest{
+				resp, reqErr := env.client.CheckAccess(ctx, &pb.CheckAccessRequest{
 					PrincipalId:         "usr-admin",
 					ResourceType:        "database",
 					Action:              "WRITE",
@@ -172,16 +244,16 @@ func TestIntegration_HotReload_And_ConcurrentAccess(t *testing.T) {
 }
 
 func TestIntegration_PolicyDelete_RoundTrip(t *testing.T) {
-	client := setupTestServer(t)
+	env := setupTestServer(t)
 
 	const policyID = "pol-integration-002"
 
-	applyPolicyUpdates(t, client,
+	applyPolicyUpdates(t, env,
 		upsertPolicy(policyID, "ALLOW", "document", "READ",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["editor"]}]`),
 	)
 
-	resp, err := checkAccess(client, "usr-2", map[string]*pb.AttributeValues{
+	resp, err := checkAccess(env.client, "usr-2", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"editor"}},
 	}, "document", "READ")
 	if err != nil {
@@ -194,9 +266,9 @@ func TestIntegration_PolicyDelete_RoundTrip(t *testing.T) {
 		t.Errorf("expected matched policy id %q, got %q", policyID, resp.MatchedPolicyId)
 	}
 
-	applyPolicyUpdates(t, client, deletePolicy(policyID))
+	applyPolicyUpdates(t, env, deletePolicy(policyID))
 
-	resp, err = checkAccess(client, "usr-2", map[string]*pb.AttributeValues{
+	resp, err = checkAccess(env.client, "usr-2", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"editor"}},
 	}, "document", "READ")
 	if err != nil {
@@ -210,20 +282,21 @@ func TestIntegration_PolicyDelete_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestIntegration_StreamInvalidPolicyJson_ContinuesServing(t *testing.T) {
-	client := setupTestServer(t)
+func TestIntegration_InvalidPolicyJson_ContinuesServing(t *testing.T) {
+	env := setupTestServer(t)
 
-	applyPolicyUpdates(t, client,
-		&pb.PolicyUpdateRequest{
-			PolicyId:   "pol-broken-json",
-			Action:     "UPSERT",
-			PolicyJson: `{ this is not valid json `,
+	applyPolicyUpdates(t, env,
+		policyUpdate{
+			id:      "pol-broken-json",
+			action:  subscriber.ActionUpsert,
+			json:    `{ this is not valid json `,
+			invalid: true,
 		},
 		upsertPolicy("pol-recovery-001", "ALLOW", "document", "WRITE",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["admin"]}]`),
 	)
 
-	resp, err := checkAccess(client, "usr-admin", map[string]*pb.AttributeValues{
+	resp, err := checkAccess(env.client, "usr-admin", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"admin"}},
 	}, "document", "WRITE")
 	if err != nil {
@@ -238,9 +311,9 @@ func TestIntegration_StreamInvalidPolicyJson_ContinuesServing(t *testing.T) {
 }
 
 func TestIntegration_RegexPolicy_EndToEnd(t *testing.T) {
-	client := setupTestServer(t)
+	env := setupTestServer(t)
 
-	applyPolicyUpdates(t, client,
+	applyPolicyUpdates(t, env,
 		upsertPolicy("pol-regex-001", "ALLOW", "vault", "UNSEAL",
 			`[{"attribute": "principal.account_id", "operator": "REGEX", "value": ["^svc-[a-z]+-prod$"]}]`),
 	)
@@ -257,7 +330,7 @@ func TestIntegration_RegexPolicy_EndToEnd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := client.CheckAccess(context.Background(), &pb.CheckAccessRequest{
+			resp, err := env.client.CheckAccess(context.Background(), &pb.CheckAccessRequest{
 				PrincipalId:         tt.accountID,
 				ResourceType:        "vault",
 				Action:              "UNSEAL",
@@ -278,19 +351,19 @@ func TestIntegration_RegexPolicy_EndToEnd(t *testing.T) {
 }
 
 func TestIntegration_DenyPolicy_OverridesAllow(t *testing.T) {
-	client := setupTestServer(t)
+	env := setupTestServer(t)
 
 	// Both a DENY and an ALLOW policy target the same resource/action and both
 	// would match the request. Deny-overrides must return denied with the deny
-	// policy id, deterministically, regardless of stream order.
-	applyPolicyUpdates(t, client,
+	// policy id, deterministically, regardless of publish order.
+	applyPolicyUpdates(t, env,
 		upsertPolicy("pol-allow-001", "ALLOW", "document", "WRITE",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["intern"]}]`),
 		upsertPolicy("pol-deny-001", "DENY", "document", "WRITE",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["intern"]}]`),
 	)
 
-	resp, err := checkAccess(client, "usr-intern", map[string]*pb.AttributeValues{
+	resp, err := checkAccess(env.client, "usr-intern", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"intern"}},
 	}, "document", "WRITE")
 	if err != nil {
@@ -304,50 +377,18 @@ func TestIntegration_DenyPolicy_OverridesAllow(t *testing.T) {
 	}
 }
 
-// streamSession opens a StreamPolicyUpdates session, sends the given updates
-// in order, closes the stream, and returns the server's acknowledgement so
-// callers can assert on Success and ActivePolicyCount.
-func streamSession(t *testing.T, client pb.AuthorizationServiceClient, updates ...*pb.PolicyUpdateRequest) *pb.PolicyUpdateResponse {
-	t.Helper()
+// TestIntegration_RedisPublish_ReportsActiveCount guards that publishing
+// upserts and deletes on the Redis stream changes the live store count. The
+// old StreamPolicyUpdates acknowledgement no longer exists; Count() is the
+// in-process equivalent of the Prometheus authz_policy_count gauge.
+func TestIntegration_RedisPublish_ReportsActiveCount(t *testing.T) {
+	env := setupTestServer(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	stream, err := client.StreamPolicyUpdates(ctx)
-	if err != nil {
-		t.Fatalf("failed to open policy update stream: %v", err)
-	}
-	for _, update := range updates {
-		if err := stream.Send(update); err != nil {
-			t.Fatalf("failed to send policy update %q: %v", update.PolicyId, err)
-		}
-	}
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		t.Fatalf("failed to close policy update stream: %v", err)
-	}
-	return resp
-}
-
-// TestIntegration_StreamPolicyUpdates_ReportsActiveCount guards the contract
-// that the StreamPolicyUpdates acknowledgement reports the live active policy
-// count after the session's updates have been applied. Previously the server
-// closed the stream with a bare {Success:true} and left ActivePolicyCount at 0.
-func TestIntegration_StreamPolicyUpdates_ReportsActiveCount(t *testing.T) {
-	client := setupTestServer(t)
-
-	// 1. An empty session on a fresh store should report zero active policies.
-	resp := streamSession(t, client)
-	if !resp.GetSuccess() {
-		t.Fatalf("expected success=true on empty session, got false")
-	}
-	if got := resp.GetActivePolicyCount(); got != 0 {
-		t.Fatalf("expected active_policy_count=0 on fresh store, got %d", got)
+	if got := env.store.Count(); got != 0 {
+		t.Fatalf("expected active policy count=0 on fresh store, got %d", got)
 	}
 
-	// 2. After upserting three policies, the session response must report the
-	//    live count. This is the regression guard for the bare-{Success:true} bug.
-	resp = streamSession(t, client,
+	applyPolicyUpdates(t, env,
 		upsertPolicy("pol-count-001", "ALLOW", "document", "READ",
 			`[{"attribute": "principal.role", "operator": "EQUALS", "value": ["admin"]}]`),
 		upsertPolicy("pol-count-002", "DENY", "document", "WRITE",
@@ -355,26 +396,19 @@ func TestIntegration_StreamPolicyUpdates_ReportsActiveCount(t *testing.T) {
 		upsertPolicy("pol-count-003", "ALLOW", "vault", "UNSEAL",
 			`[{"attribute": "principal.account_id", "operator": "REGEX", "value": ["^svc-.*"]}]`),
 	)
-	if !resp.GetSuccess() {
-		t.Fatalf("expected success=true after upserts, got false")
-	}
-	if got := resp.GetActivePolicyCount(); got != 3 {
-		t.Fatalf("expected active_policy_count=3 after upserts, got %d", got)
+	if got := env.store.Count(); got != 3 {
+		t.Fatalf("expected active policy count=3 after upserts, got %d", got)
 	}
 
-	// 3. Deleting one policy must decrement the reported count.
-	resp = streamSession(t, client, deletePolicy("pol-count-002"))
-	if !resp.GetSuccess() {
-		t.Fatalf("expected success=true after delete, got false")
-	}
-	if got := resp.GetActivePolicyCount(); got != 2 {
-		t.Fatalf("expected active_policy_count=2 after delete, got %d", got)
+	applyPolicyUpdates(t, env, deletePolicy("pol-count-002"))
+	if got := env.store.Count(); got != 2 {
+		t.Fatalf("expected active policy count=2 after delete, got %d", got)
 	}
 
-	// 4. The reported count must reflect real store state: the surviving allow
-	//    policy still grants admin READ, and the deleted deny policy means intern
-	//    WRITE now falls through to default deny (not an explicit deny).
-	allowResp, err := checkAccess(client, "usr-admin", map[string]*pb.AttributeValues{
+	// The reported count must reflect real store state: the surviving allow
+	// policy still grants admin READ, and the deleted deny policy means intern
+	// WRITE now falls through to default deny (not an explicit deny).
+	allowResp, err := checkAccess(env.client, "usr-admin", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"admin"}},
 	}, "document", "READ")
 	if err != nil {
@@ -385,7 +419,7 @@ func TestIntegration_StreamPolicyUpdates_ReportsActiveCount(t *testing.T) {
 			allowResp.Allowed, allowResp.MatchedPolicyId)
 	}
 
-	denyResp, err := checkAccess(client, "usr-intern", map[string]*pb.AttributeValues{
+	denyResp, err := checkAccess(env.client, "usr-intern", map[string]*pb.AttributeValues{
 		"role": {Values: []string{"intern"}},
 	}, "document", "WRITE")
 	if err != nil {

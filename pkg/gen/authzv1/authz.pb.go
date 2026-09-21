@@ -226,118 +226,6 @@ func (x *CheckAccessResponse) GetEvaluationTimeNs() int64 {
 	return 0
 }
 
-type PolicyUpdateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PolicyId      string                 `protobuf:"bytes,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
-	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"` // "UPSERT" or "DELETE"
-	PolicyJson    string                 `protobuf:"bytes,3,opt,name=policy_json,json=policyJson,proto3" json:"policy_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PolicyUpdateRequest) Reset() {
-	*x = PolicyUpdateRequest{}
-	mi := &file_authz_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PolicyUpdateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PolicyUpdateRequest) ProtoMessage() {}
-
-func (x *PolicyUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_authz_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PolicyUpdateRequest.ProtoReflect.Descriptor instead.
-func (*PolicyUpdateRequest) Descriptor() ([]byte, []int) {
-	return file_authz_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *PolicyUpdateRequest) GetPolicyId() string {
-	if x != nil {
-		return x.PolicyId
-	}
-	return ""
-}
-
-func (x *PolicyUpdateRequest) GetAction() string {
-	if x != nil {
-		return x.Action
-	}
-	return ""
-}
-
-func (x *PolicyUpdateRequest) GetPolicyJson() string {
-	if x != nil {
-		return x.PolicyJson
-	}
-	return ""
-}
-
-type PolicyUpdateResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Success           bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ActivePolicyCount int32                  `protobuf:"varint,2,opt,name=active_policy_count,json=activePolicyCount,proto3" json:"active_policy_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *PolicyUpdateResponse) Reset() {
-	*x = PolicyUpdateResponse{}
-	mi := &file_authz_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PolicyUpdateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PolicyUpdateResponse) ProtoMessage() {}
-
-func (x *PolicyUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_authz_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PolicyUpdateResponse.ProtoReflect.Descriptor instead.
-func (*PolicyUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_authz_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *PolicyUpdateResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *PolicyUpdateResponse) GetActivePolicyCount() int32 {
-	if x != nil {
-		return x.ActivePolicyCount
-	}
-	return 0
-}
-
 var File_authz_proto protoreflect.FileDescriptor
 
 const file_authz_proto_rawDesc = "" +
@@ -367,18 +255,9 @@ const file_authz_proto_rawDesc = "" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12*\n" +
 	"\x11matched_policy_id\x18\x02 \x01(\tR\x0fmatchedPolicyId\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12,\n" +
-	"\x12evaluation_time_ns\x18\x04 \x01(\x03R\x10evaluationTimeNs\"k\n" +
-	"\x13PolicyUpdateRequest\x12\x1b\n" +
-	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x16\n" +
-	"\x06action\x18\x02 \x01(\tR\x06action\x12\x1f\n" +
-	"\vpolicy_json\x18\x03 \x01(\tR\n" +
-	"policyJson\"`\n" +
-	"\x14PolicyUpdateResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12.\n" +
-	"\x13active_policy_count\x18\x02 \x01(\x05R\x11activePolicyCount2\xba\x01\n" +
+	"\x12evaluation_time_ns\x18\x04 \x01(\x03R\x10evaluationTimeNs2b\n" +
 	"\x14AuthorizationService\x12J\n" +
-	"\vCheckAccess\x12\x1c.authz.v1.CheckAccessRequest\x1a\x1d.authz.v1.CheckAccessResponse\x12V\n" +
-	"\x13StreamPolicyUpdates\x12\x1d.authz.v1.PolicyUpdateRequest\x1a\x1e.authz.v1.PolicyUpdateResponse(\x01B4Z2github.com/casuncio/bouncer-engine/pkg/gen/authzv1b\x06proto3"
+	"\vCheckAccess\x12\x1c.authz.v1.CheckAccessRequest\x1a\x1d.authz.v1.CheckAccessResponseB4Z2github.com/casuncio/bouncer-engine/pkg/gen/authzv1b\x06proto3"
 
 var (
 	file_authz_proto_rawDescOnce sync.Once
@@ -392,30 +271,26 @@ func file_authz_proto_rawDescGZIP() []byte {
 	return file_authz_proto_rawDescData
 }
 
-var file_authz_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_authz_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_authz_proto_goTypes = []any{
-	(*AttributeValues)(nil),      // 0: authz.v1.AttributeValues
-	(*CheckAccessRequest)(nil),   // 1: authz.v1.CheckAccessRequest
-	(*CheckAccessResponse)(nil),  // 2: authz.v1.CheckAccessResponse
-	(*PolicyUpdateRequest)(nil),  // 3: authz.v1.PolicyUpdateRequest
-	(*PolicyUpdateResponse)(nil), // 4: authz.v1.PolicyUpdateResponse
-	nil,                          // 5: authz.v1.CheckAccessRequest.PrincipalAttributesEntry
-	nil,                          // 6: authz.v1.CheckAccessRequest.ResourceAttributesEntry
-	nil,                          // 7: authz.v1.CheckAccessRequest.EnvironmentAttributesEntry
+	(*AttributeValues)(nil),     // 0: authz.v1.AttributeValues
+	(*CheckAccessRequest)(nil),  // 1: authz.v1.CheckAccessRequest
+	(*CheckAccessResponse)(nil), // 2: authz.v1.CheckAccessResponse
+	nil,                         // 3: authz.v1.CheckAccessRequest.PrincipalAttributesEntry
+	nil,                         // 4: authz.v1.CheckAccessRequest.ResourceAttributesEntry
+	nil,                         // 5: authz.v1.CheckAccessRequest.EnvironmentAttributesEntry
 }
 var file_authz_proto_depIdxs = []int32{
-	5, // 0: authz.v1.CheckAccessRequest.principal_attributes:type_name -> authz.v1.CheckAccessRequest.PrincipalAttributesEntry
-	6, // 1: authz.v1.CheckAccessRequest.resource_attributes:type_name -> authz.v1.CheckAccessRequest.ResourceAttributesEntry
-	7, // 2: authz.v1.CheckAccessRequest.environment_attributes:type_name -> authz.v1.CheckAccessRequest.EnvironmentAttributesEntry
+	3, // 0: authz.v1.CheckAccessRequest.principal_attributes:type_name -> authz.v1.CheckAccessRequest.PrincipalAttributesEntry
+	4, // 1: authz.v1.CheckAccessRequest.resource_attributes:type_name -> authz.v1.CheckAccessRequest.ResourceAttributesEntry
+	5, // 2: authz.v1.CheckAccessRequest.environment_attributes:type_name -> authz.v1.CheckAccessRequest.EnvironmentAttributesEntry
 	0, // 3: authz.v1.CheckAccessRequest.PrincipalAttributesEntry.value:type_name -> authz.v1.AttributeValues
 	0, // 4: authz.v1.CheckAccessRequest.ResourceAttributesEntry.value:type_name -> authz.v1.AttributeValues
 	0, // 5: authz.v1.CheckAccessRequest.EnvironmentAttributesEntry.value:type_name -> authz.v1.AttributeValues
 	1, // 6: authz.v1.AuthorizationService.CheckAccess:input_type -> authz.v1.CheckAccessRequest
-	3, // 7: authz.v1.AuthorizationService.StreamPolicyUpdates:input_type -> authz.v1.PolicyUpdateRequest
-	2, // 8: authz.v1.AuthorizationService.CheckAccess:output_type -> authz.v1.CheckAccessResponse
-	4, // 9: authz.v1.AuthorizationService.StreamPolicyUpdates:output_type -> authz.v1.PolicyUpdateResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
+	2, // 7: authz.v1.AuthorizationService.CheckAccess:output_type -> authz.v1.CheckAccessResponse
+	7, // [7:8] is the sub-list for method output_type
+	6, // [6:7] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
 	6, // [6:6] is the sub-list for extension extendee
 	0, // [0:6] is the sub-list for field type_name
@@ -432,7 +307,7 @@ func file_authz_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_authz_proto_rawDesc), len(file_authz_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -2,29 +2,25 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"log/slog"
 
 	"github.com/casuncio/bouncer-engine/internal/audit"
 	"github.com/casuncio/bouncer-engine/internal/engine"
-	"github.com/casuncio/bouncer-engine/internal/store"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
 )
 
-// AuthzServer implements the gRPC AuthorizationService
+// AuthzServer implements the gRPC AuthorizationService.
+// Policy updates are not accepted over gRPC; they arrive on the Redis stream
+// consumed by internal/subscriber.
 type AuthzServer struct {
 	pb.UnimplementedAuthorizationServiceServer
 	engine *engine.Engine
-	store  *store.PolicyStore
 	audit  *audit.AuditLogger
 }
 
-// NewAuthzServer creates a new gRPC server bound to your ABAC engine
-func NewAuthzServer(e *engine.Engine, s *store.PolicyStore, a *audit.AuditLogger) *AuthzServer {
+// NewAuthzServer creates a new gRPC server bound to the ABAC engine.
+func NewAuthzServer(e *engine.Engine, a *audit.AuditLogger) *AuthzServer {
 	return &AuthzServer{
 		engine: e,
-		store:  s,
 		audit:  a,
 	}
 }
@@ -82,80 +78,4 @@ func (s *AuthzServer) CheckAccess(ctx context.Context, req *pb.CheckAccessReques
 		Reason:           evalResp.Reason,
 		EvaluationTimeNs: evalResp.EvaluationTimeNs,
 	}, nil
-}
-
-func (s *AuthzServer) processUpdate(req *pb.PolicyUpdateRequest) {
-	switch req.Action {
-	case "UPSERT":
-		var p store.Policy
-		if err := json.Unmarshal([]byte(req.PolicyJson), &p); err != nil {
-			slog.Error("failed to parse incoming policy payload",
-				slog.String("policy_id", req.PolicyId),
-				slog.String("error", err.Error()),
-			)
-			return
-		}
-
-		if p.Access != store.AccessAllow && p.Access != store.AccessDeny {
-			slog.Error("rejected policy payload: unsupported access mode",
-				slog.String("policy_id", req.PolicyId),
-				slog.String("access", string(p.Access)),
-			)
-			return
-		}
-
-		if err := p.Compile(); err != nil {
-			slog.Error("failed to compile incoming policy payload",
-				slog.String("policy_id", req.PolicyId),
-				slog.String("error", err.Error()),
-			)
-			return
-		}
-
-		s.store.UpsertPolicy(p)
-		slog.Info("policy upserted into live cache",
-			slog.String("policy_id", p.ID),
-			slog.String("policy_description", p.Description),
-			slog.String("access", string(p.Access)),
-			slog.String("resource_type", p.Target.ResourceType),
-			slog.String("action", p.Target.Action),
-			slog.Int("condition_count", len(p.Conditions)),
-		)
-
-		slog.Debug("policy condition details",
-			slog.String("policy_id", p.ID),
-			slog.Any("conditions", p.Conditions),
-		)
-
-	case "DELETE":
-		s.store.DeletePolicy(req.PolicyId)
-		slog.Info("policy removed from live cache",
-			slog.String("policy_id", req.PolicyId),
-		)
-	}
-}
-
-// StreamPolicyUpdates ingests a live stream of policy changes
-func (s *AuthzServer) StreamPolicyUpdates(stream pb.AuthorizationService_StreamPolicyUpdatesServer) error {
-	slog.Info("Policy sync stream connected")
-
-	for {
-		req, err := stream.Recv()
-		if err == io.EOF {
-			// The client closed the stream. Report the live active policy count
-			// so callers (e.g. the PEP seeding the store) can confirm ingestion
-			// without a separate round-trip. Count() is lock-free.
-			slog.Info("Policy sync stream closed by client")
-			return stream.SendAndClose(&pb.PolicyUpdateResponse{
-				Success:           true,
-				ActivePolicyCount: int32(s.store.Count()),
-			})
-		}
-		if err != nil {
-			slog.Error("Error reading from policy stream", "error", err)
-			return err
-		}
-
-		s.processUpdate(req)
-	}
 }

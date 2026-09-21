@@ -23,8 +23,7 @@ Unlike standard Role-Based Access Control (RBAC) which relies on static group as
 
 ### Directory Structure
 * `api/` - API contracts, JSON Schemas, and Protobuf definitions.
-* `cmd/` - Executable entry points (`bouncer-engine` server, `mock-client` demo client).
-* `cmd/` - Executable entry points.
+* `cmd/` - Executable entry points (`bouncer-engine` server, `mock-publisher` demo publisher).
 * `internal/` - Private application logic (Policy Engine, Datastore, Audit Pipeline, Metrics).
 * `pkg/` - Public libraries and generated client stubs.
 * `deploy/` - Docker Compose observability stack (engine + Prometheus + Grafana).
@@ -36,9 +35,10 @@ Unlike standard Role-Based Access Control (RBAC) which relies on static group as
 * **Go 1.26+** to build from source, **or** **Docker + Docker Compose v2** to run the containerized stack.
 
 ### Run locally (binary)
+Policy updates are ingested only from the Redis stream `authpolicy:events` (`REDIS_ADDR`, default `localhost:6379`). `CheckAccess` stays on gRPC.
 ```bash
 make build            # produces bin/bouncer-engine
-./bin/bouncer-engine  # serves gRPC on :50051, /metrics on :9090
+./bin/bouncer-engine  # serves gRPC on :50051, /metrics on :9090; subscribes to Redis
 ```
 
 ### Run the full stack via Docker
@@ -76,7 +76,7 @@ make bench  # engine benchmarks, constrained to 1 vCPU
 
 ### Sample traffic
 ```bash
-go run ./cmd/mock-client   # streams a policy and performs one CheckAccess
+go run ./cmd/mock-publisher   # XADDs a policy to Redis, then performs one CheckAccess
 ```
 
 ### Load testing (k6)
@@ -101,7 +101,7 @@ The run reports **p50 / p90 / p95 / p99** for both end-to-end gRPC latency (`grp
 | Variable                 | Default             | Description                                  |
 | :---                     | :---                | :---                                         |
 | `BOUNCER_TARGET`         | `localhost:50051`   | Engine gRPC address (used by both seeder and k6) |
-| `REDIS_ADDR`             | `127.0.0.1:6379`    | Redis address for policy seeding. `make loadtest` starts Redis here when the port is closed |
+| `REDIS_ADDR`             | `localhost:6379`    | Redis address the seeder publishes policy updates to |
 | `BOUNCER_BASELINE_RPS`   | `1000`              | Target RPS for the baseline scenario         |
 | `BOUNCER_STRESS_RPS`     | `10000`             | Target RPS for the stress scenario           |
 | `BOUNCER_SKIP_BASELINE`  | `false`             | Set `true` to run only the stress scenario   |

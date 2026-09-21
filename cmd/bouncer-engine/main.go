@@ -66,7 +66,7 @@ func main() {
 	// The unary interceptor records authz_evaluations_total and
 	// authz_evaluation_duration_seconds for every CheckAccess call.
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(metrics.UnaryInterceptor))
-	authzServer := server.NewAuthzServer(abacEngine, policyStore, auditLogger)
+	authzServer := server.NewAuthzServer(abacEngine, auditLogger)
 	pb.RegisterAuthorizationServiceServer(grpcServer, authzServer)
 
 	// 7b. Serve the Prometheus /metrics endpoint on a separate HTTP port so

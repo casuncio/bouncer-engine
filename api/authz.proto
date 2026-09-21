@@ -7,7 +7,6 @@ option go_package = "github.com/casuncio/bouncer-engine/pkg/gen/authzv1";
 
 service AuthorizationService {
   rpc CheckAccess (CheckAccessRequest) returns (CheckAccessResponse);
-  rpc StreamPolicyUpdates (stream PolicyUpdateRequest) returns (PolicyUpdateResponse);
 }
 
 // Wrapper to support multi-value attributes (e.g., roles=["admin", "editor"])
@@ -32,13 +31,3 @@ message CheckAccessResponse {
   int64 evaluation_time_ns = 4;
 }
 
-message PolicyUpdateRequest {
-  string policy_id = 1;
-  string action = 2; // "UPSERT" or "DELETE"
-  string policy_json = 3;
-}
-
-message PolicyUpdateResponse {
-  bool success = 1;
-  int32 active_policy_count = 2;
-}

@@ -19,8 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuthorizationService_CheckAccess_FullMethodName         = "/authz.v1.AuthorizationService/CheckAccess"
-	AuthorizationService_StreamPolicyUpdates_FullMethodName = "/authz.v1.AuthorizationService/StreamPolicyUpdates"
+	AuthorizationService_CheckAccess_FullMethodName = "/authz.v1.AuthorizationService/CheckAccess"
 )
 
 // AuthorizationServiceClient is the client API for AuthorizationService service.
@@ -28,7 +27,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AuthorizationServiceClient interface {
 	CheckAccess(ctx context.Context, in *CheckAccessRequest, opts ...grpc.CallOption) (*CheckAccessResponse, error)
-	StreamPolicyUpdates(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PolicyUpdateRequest, PolicyUpdateResponse], error)
 }
 
 type authorizationServiceClient struct {
@@ -49,25 +47,11 @@ func (c *authorizationServiceClient) CheckAccess(ctx context.Context, in *CheckA
 	return out, nil
 }
 
-func (c *authorizationServiceClient) StreamPolicyUpdates(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PolicyUpdateRequest, PolicyUpdateResponse], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &AuthorizationService_ServiceDesc.Streams[0], AuthorizationService_StreamPolicyUpdates_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[PolicyUpdateRequest, PolicyUpdateResponse]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AuthorizationService_StreamPolicyUpdatesClient = grpc.ClientStreamingClient[PolicyUpdateRequest, PolicyUpdateResponse]
-
 // AuthorizationServiceServer is the server API for AuthorizationService service.
 // All implementations must embed UnimplementedAuthorizationServiceServer
 // for forward compatibility.
 type AuthorizationServiceServer interface {
 	CheckAccess(context.Context, *CheckAccessRequest) (*CheckAccessResponse, error)
-	StreamPolicyUpdates(grpc.ClientStreamingServer[PolicyUpdateRequest, PolicyUpdateResponse]) error
 	mustEmbedUnimplementedAuthorizationServiceServer()
 }
 
@@ -80,9 +64,6 @@ type UnimplementedAuthorizationServiceServer struct{}
 
 func (UnimplementedAuthorizationServiceServer) CheckAccess(context.Context, *CheckAccessRequest) (*CheckAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckAccess not implemented")
-}
-func (UnimplementedAuthorizationServiceServer) StreamPolicyUpdates(grpc.ClientStreamingServer[PolicyUpdateRequest, PolicyUpdateResponse]) error {
-	return status.Error(codes.Unimplemented, "method StreamPolicyUpdates not implemented")
 }
 func (UnimplementedAuthorizationServiceServer) mustEmbedUnimplementedAuthorizationServiceServer() {}
 func (UnimplementedAuthorizationServiceServer) testEmbeddedByValue()                              {}
@@ -123,13 +104,6 @@ func _AuthorizationService_CheckAccess_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AuthorizationService_StreamPolicyUpdates_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(AuthorizationServiceServer).StreamPolicyUpdates(&grpc.GenericServerStream[PolicyUpdateRequest, PolicyUpdateResponse]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AuthorizationService_StreamPolicyUpdatesServer = grpc.ClientStreamingServer[PolicyUpdateRequest, PolicyUpdateResponse]
-
 // AuthorizationService_ServiceDesc is the grpc.ServiceDesc for AuthorizationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -142,12 +116,6 @@ var AuthorizationService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AuthorizationService_CheckAccess_Handler,
 		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "StreamPolicyUpdates",
-			Handler:       _AuthorizationService_StreamPolicyUpdates_Handler,
-			ClientStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "authz.proto",
 }
