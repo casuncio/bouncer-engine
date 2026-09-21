@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
 	"github.com/casuncio/bouncer-engine/internal/audit"
@@ -14,6 +16,7 @@ import (
 	"github.com/casuncio/bouncer-engine/internal/metrics"
 	"github.com/casuncio/bouncer-engine/internal/server"
 	"github.com/casuncio/bouncer-engine/internal/store"
+	"github.com/casuncio/bouncer-engine/internal/subscriber"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
 )
 
@@ -46,14 +49,27 @@ func main() {
 	auditLogger.Start(5)
 	defer auditLogger.Stop()
 
-	// 6. Create the gRPC Server and register the Bouncer Engine service.
+	// 6. Create Redis Subscriber. Policy updates arrive only on this stream.
+	redisAddr := subscriber.AddrFromEnv()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: "",
+		DB:       0,
+	})
+	defer rdb.Close()
+
+	policySubscriber := subscriber.NewPolicyUpdateSubscriber(subscriber.StreamKey, rdb, policyStore)
+	go policySubscriber.Start(context.Background())
+	slog.Info("redis policy subscriber started", "addr", redisAddr, "stream", subscriber.StreamKey)
+
+	// 7. Create the gRPC Server and register the Bouncer Engine service.
 	// The unary interceptor records authz_evaluations_total and
 	// authz_evaluation_duration_seconds for every CheckAccess call.
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(metrics.UnaryInterceptor))
 	authzServer := server.NewAuthzServer(abacEngine, policyStore, auditLogger)
 	pb.RegisterAuthorizationServiceServer(grpcServer, authzServer)
 
-	// 6b. Serve the Prometheus /metrics endpoint on a separate HTTP port so
+	// 7b. Serve the Prometheus /metrics endpoint on a separate HTTP port so
 	// scrapers never touch the gRPC listener.
 	metricsAddr := ":9090"
 	go func() {
@@ -65,7 +81,7 @@ func main() {
 	}()
 	slog.Info("Prometheus metrics endpoint listening", "addr", metricsAddr)
 
-	// 7. Start serving live network traffic
+	// 8. Start serving live network traffic
 	slog.Info("gRPC server actively listening for authorization checks", "port", port)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("gRPC server crashed", "error", err)
