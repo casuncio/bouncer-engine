@@ -1,15 +1,14 @@
-// Command seed uploads a fixed set of authorization policies to a running
-// bouncer-engine instance via the StreamPolicyUpdates gRPC API, then issues
-// a single CheckAccess probe to verify the engine is evaluating requests as
-// expected.
+// Command seed publishes a fixed set of authorization policies to the Redis
+// stream consumed by bouncer-engine, then issues a single CheckAccess probe
+// to verify the engine is evaluating requests as expected.
 //
 // It is intended to run before loadtest/checkaccess.js so the k6 test can
 // assert correct allow/deny verdicts against a known policy set.
 //
 // Usage:
 //
-//	go run ./loadtest/seed                 # uses localhost:50051
-//	BOUNCER_TARGET=host:50051 go run ./loadtest/seed
+//	go run ./loadtest/seed                 # Redis localhost:6379, gRPC localhost:50051
+//	BOUNCER_TARGET=host:50051 REDIS_ADDR=host:6379 go run ./loadtest/seed
 //	make loadtest                          # seeds then runs k6
 package main
 
@@ -19,12 +18,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/casuncio/bouncer-engine/internal/subscriber"
 	pb "github.com/casuncio/bouncer-engine/pkg/gen/authzv1"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// main connects to the bouncer-engine, streams the policies below into it,
+// main connects to Redis and the bouncer-engine, publishes the policies below,
 // and verifies the resulting policy set with a probe request. Any failure
 // is logged and exits non-zero so CI/Make targets can detect a bad seed.
 func main() {
@@ -34,6 +35,10 @@ func main() {
 	if target == "" {
 		target = "localhost:50051"
 	}
+
+	redisAddr := subscriber.AddrFromEnv()
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer rdb.Close()
 
 	// Plain-text (no TLS) gRPC channel — appropriate for local dev and
 	// load testing. Production deployments should use TLS credentials.
@@ -45,11 +50,10 @@ func main() {
 	defer conn.Close()
 	client := pb.NewAuthorizationServiceClient(conn)
 
-	// Policies are stored as raw JSON strings (matching the engine's
-	// PolicyJson wire field) so this tool stays a thin seeder and does not
-	// need to know the policy struct schema. The set here must mirror the
-	// fixtures expected by loadtest/checkaccess.js — adding/removing a
-	// policy here likely requires updating the k6 fixtures too.
+	// Policies are stored as raw JSON strings so this tool stays a thin
+	// seeder and does not need to know the policy struct schema. The set
+	// here must mirror the fixtures expected by loadtest/checkaccess.js —
+	// adding/removing a policy here likely requires updating the k6 fixtures too.
 	policies := []struct {
 		id   string
 		json string
@@ -75,63 +79,42 @@ func main() {
 		},
 	}
 
-	// Open a streaming policy update RPC. All policies are sent on the
-	// same stream and committed atomically when CloseAndRecv is called.
-	stream, err := client.StreamPolicyUpdates(context.Background())
-	if err != nil {
-		slog.Error("failed to open policy stream", "error", err)
-		os.Exit(1)
-	}
-
-	// Upsert each policy one by one. UPSERT keeps this idempotent —
-	// re-running seed replaces existing policies with the same id rather
-	// than creating duplicates.
+	ctx := context.Background()
 	for _, p := range policies {
-		if err := stream.Send(&pb.PolicyUpdateRequest{
-			PolicyId:   p.id,
-			Action:     "UPSERT",
-			PolicyJson: p.json,
-		}); err != nil {
-			slog.Error("failed to send policy", "id", p.id, "error", err)
+		if err := subscriber.Publish(ctx, rdb, subscriber.StreamKey, subscriber.ActionUpsert, p.id, p.json); err != nil {
+			slog.Error("failed to publish policy", "id", p.id, "redis", redisAddr, "error", err)
 			os.Exit(1)
 		}
 	}
+	slog.Info("policies published", "count", len(policies), "redis", redisAddr, "stream", subscriber.StreamKey)
 
-	// CloseAndRecv flushes the stream and returns the commit summary,
-	// including the total number of active policies now in the engine.
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		slog.Error("failed to close policy stream", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("policies seeded", "count", len(policies), "active_policy_count", resp.ActivePolicyCount)
-
-	// Brief pause to let the engine apply the committed policies before we
-	// probe. The 50 ms value matches the engine's internal apply cadence;
-	// probing too quickly can produce a transient denial.
-	time.Sleep(50 * time.Millisecond)
-
-	// Probe: a request that should be ALLOWED by the allow-secops policy
-	// (SecurityAdmin, 10.4.4.10 in 10/8, hour 12 in 8–18). If this returns
-	// Allowed=false the seed did not take effect and the load test would
-	// produce false negatives — fail fast instead.
-	probe, err := client.CheckAccess(context.Background(), &pb.CheckAccessRequest{
-		PrincipalId:         "usr-1",
-		PrincipalAttributes: map[string]*pb.AttributeValues{"roles": {Values: []string{"SecurityAdmin"}}},
-		ResourceType:        "production-db-backup",
-		Action:              "READ",
-		EnvironmentAttributes: map[string]*pb.AttributeValues{
-			"ip_address": {Values: []string{"10.4.4.10"}},
-			"hour":       {Values: []string{"12"}},
-		},
-	})
-	if err != nil {
-		slog.Error("probe CheckAccess failed", "error", err)
-		os.Exit(1)
-	}
-	if !probe.Allowed {
-		slog.Error("probe verification failed", "allowed", probe.Allowed, "reason", probe.Reason)
-		os.Exit(1)
+	// The subscriber applies updates asynchronously. Probe until the allow
+	// policy is live so a slow consumer does not fail the seed.
+	deadline := time.Now().Add(5 * time.Second)
+	var probe *pb.CheckAccessResponse
+	for {
+		probe, err = client.CheckAccess(ctx, &pb.CheckAccessRequest{
+			PrincipalId:         "usr-1",
+			PrincipalAttributes: map[string]*pb.AttributeValues{"roles": {Values: []string{"SecurityAdmin"}}},
+			ResourceType:        "production-db-backup",
+			Action:              "READ",
+			EnvironmentAttributes: map[string]*pb.AttributeValues{
+				"ip_address": {Values: []string{"10.4.4.10"}},
+				"hour":       {Values: []string{"12"}},
+			},
+		})
+		if err == nil && probe.Allowed {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				slog.Error("probe CheckAccess failed", "error", err)
+			} else {
+				slog.Error("probe verification failed", "allowed", probe.Allowed, "reason", probe.Reason)
+			}
+			os.Exit(1)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	// MatchedPolicyId confirms which policy produced the allow verdict,

@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: all gen test bench build loadtest loadtest-docker loadtest-smoke engine-start engine-stop run need-go need-buf need-k6 need-docker
+.PHONY: all gen test bench build loadtest loadtest-docker loadtest-smoke engine-start engine-stop redis-start redis-stop run need-go need-buf need-k6 need-docker
 
 # Default target
 all: gen test build
@@ -14,6 +14,14 @@ ENGINE_ADDR           ?= localhost:50051
 ENGINE_READY_TIMEOUT  ?= 30
 K6_OUT                ?=
 
+# Policy updates travel on Redis. 127.0.0.1 (not localhost) so clients do not
+# dial ::1 when Docker publishes the container on IPv4 only.
+REDIS_IMAGE           ?= redis:7-alpine
+REDIS_NAME            ?= bouncer-loadtest-redis
+REDIS_ADDR            ?= 127.0.0.1:6379
+REDIS_READY_TIMEOUT   ?= 30
+export REDIS_ADDR
+
 # BOUNCER_* knobs are read by loadtest/checkaccess.js as k6 environment.
 # Export them so the local k6 binary and the grafana/k6 container both inherit them.
 export BOUNCER_TARGET        ?= $(ENGINE_ADDR)
@@ -24,6 +32,9 @@ export BOUNCER_SKIP_STRESS
 
 # Bash /dev/tcp wants host/port as separate path segments: host:port -> host/port.
 tcp_addr              = $(subst :,/,$(ENGINE_ADDR))
+tcp_redis_addr        = $(subst :,/,$(REDIS_ADDR))
+redis_host            = $(word 1,$(subst :, ,$(REDIS_ADDR)))
+redis_port            = $(word 2,$(subst :, ,$(REDIS_ADDR)))
 
 # k6 invocations (overridable per-target / via environment).
 # Docker forwards the BOUNCER_* knobs via -e so the container honors the same
@@ -104,6 +115,49 @@ define stop_engine
 	echo "==> Stopping bouncer engine..."; if [ -f $(ENGINE_PID) ]; then kill "$$(cat $(ENGINE_PID))" 2>/dev/null || true; rm -f $(ENGINE_PID); fi
 endef
 
+# Block until Redis accepts TCP connections on $(REDIS_ADDR).
+define wait_for_redis
+	for _ in $$(seq 1 $(REDIS_READY_TIMEOUT)); do \
+		if (echo > /dev/tcp/$(tcp_redis_addr)) 2>/dev/null; then \
+			echo "redis ready on $(REDIS_ADDR)"; break; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	if ! (echo > /dev/tcp/$(tcp_redis_addr)) 2>/dev/null; then \
+		echo "::error::redis not ready on $(REDIS_ADDR) after $$(( ($(REDIS_READY_TIMEOUT) + 1) / 2 ))s"; \
+		docker logs $(REDIS_NAME) 2>/dev/null || true; \
+		exit 1; \
+	fi
+endef
+
+# start_redis: idempotent — if $(REDIS_ADDR) already accepts connections, no-op
+# (CI provides Redis as a service container). Otherwise start redis:7-alpine.
+# Sets shell var __redis_started=1 when this recipe launched the container.
+define start_redis
+	__redis_started=0; \
+	if (echo > /dev/tcp/$(tcp_redis_addr)) 2>/dev/null; then \
+		echo "redis already running on $(REDIS_ADDR)"; \
+	else \
+		case "$(redis_host)" in \
+			localhost|127.0.0.1) ;; \
+			*) echo "::error::redis is not reachable at $(REDIS_ADDR); refusing to start a local container for a non-local REDIS_ADDR"; exit 1 ;; \
+		esac; \
+		command -v docker >/dev/null || { echo "::error::redis is not running on $(REDIS_ADDR) and 'docker' was not found in PATH"; exit 1; }; \
+		echo "==> Starting redis ($(REDIS_IMAGE)) on $(REDIS_ADDR)..."; \
+		docker rm -f $(REDIS_NAME) >/dev/null 2>&1 || true; \
+		docker run -d --rm --name $(REDIS_NAME) -p $(redis_host):$(redis_port):6379 $(REDIS_IMAGE) >/dev/null; \
+		__redis_started=1; \
+		echo "==> Waiting for redis on $(REDIS_ADDR)..."; \
+		$(wait_for_redis); \
+	fi
+endef
+
+# stop_redis: one line so it expands cleanly inside a single-quoted EXIT trap.
+# Only removes the container this Makefile starts; an external Redis is left alone.
+define stop_redis
+	echo "==> Stopping redis..."; docker rm -f $(REDIS_NAME) >/dev/null 2>&1 || true
+endef
+
 ## engine-start: Build and launch the engine in the background, wait for :50051
 engine-start: build
 	@$(start_engine)
@@ -112,6 +166,14 @@ engine-start: build
 engine-stop:
 	@$(stop_engine)
 
+## redis-start: Start Redis if $(REDIS_ADDR) is not already accepting connections
+redis-start:
+	@set -e; $(start_redis)
+
+## redis-stop: Stop the Redis container started by `redis-start` / `loadtest`
+redis-stop:
+	@$(stop_redis)
+
 ## run: Build and run the engine in the foreground (Ctrl-C to stop)
 run: build
 	@echo "==> Running bouncer engine in foreground (Ctrl-C to stop)..."
@@ -119,10 +181,12 @@ run: build
 
 # --- Load tests --------------------------------------------------------------
 # Full lifecycle load test. $(K6_RUN) selects the k6 invocation (local vs docker).
-# Reuses an already-running engine; otherwise starts one and stops it on exit.
+# Reuses an already-running Redis and engine; otherwise starts them and stops
+# only what this recipe launched (EXIT trap).
 define run_loadtest
 	@set -e; \
-	trap 'if [ "$${__started:-0}" = "1" ]; then $(stop_engine); fi' EXIT; \
+	trap 'if [ "$${__started:-0}" = "1" ]; then $(stop_engine); fi; if [ "$${__redis_started:-0}" = "1" ]; then $(stop_redis); fi' EXIT; \
+	$(start_redis); \
 	$(start_engine); \
 	echo "==> Seeding test policies..."; \
 	go run ./loadtest/seed; \
@@ -131,7 +195,7 @@ define run_loadtest
 	exit 0
 endef
 
-## loadtest: Build, start engine, seed policies, run k6 (local), stop engine
+## loadtest: Start Redis if needed, start engine, seed policies, run k6, stop what we started
 loadtest: K6_RUN := $(K6_RUN_LOCAL)
 loadtest: build need-k6
 	$(run_loadtest)

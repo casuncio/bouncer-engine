@@ -80,11 +80,11 @@ go run ./cmd/mock-client   # streams a policy and performs one CheckAccess
 ```
 
 ### Load testing (k6)
-A k6 gRPC load test lives in `loadtest/`. The `make loadtest` target first runs a Go-based policy seeder (`loadtest/seed/`) that pushes three test policies via `StreamPolicyUpdates`, then launches k6 against `CheckAccess` with a mix of allow/deny fixtures exercising every operator (`CONTAINS_ANY`, `IN_CIDR`, `BETWEEN`, `EQUALS`, explicit-deny, implicit-deny). Requires the engine to be running (`make build && ./bin/bouncer-engine` or the Docker stack).
+A k6 gRPC load test lives in `loadtest/`. The `make loadtest` target starts Redis when `REDIS_ADDR` is not already accepting connections (`redis:7-alpine` via Docker), starts the engine, runs a Go policy seeder (`loadtest/seed/`) that publishes three test policies to the Redis stream, then launches k6 against `CheckAccess` with a mix of allow/deny fixtures exercising every operator (`CONTAINS_ANY`, `IN_CIDR`, `BETWEEN`, `EQUALS`, explicit-deny, implicit-deny). k6 must be installed locally; Docker is required only when Redis is not already running. An already-listening Redis or engine is reused and left running.
 
 ```bash
-make loadtest          # seeds policies, then runs k6 (must be installed locally)
-make loadtest-docker   # seeds policies locally, then runs k6 via grafana/k6 image
+make loadtest          # starts redis + engine, seeds policies, runs k6
+make loadtest-docker   # same, but runs k6 via the grafana/k6 image
 make loadtest-smoke    # quick 50-RPS baseline-only check
 ```
 
@@ -101,6 +101,7 @@ The run reports **p50 / p90 / p95 / p99** for both end-to-end gRPC latency (`grp
 | Variable                 | Default             | Description                                  |
 | :---                     | :---                | :---                                         |
 | `BOUNCER_TARGET`         | `localhost:50051`   | Engine gRPC address (used by both seeder and k6) |
+| `REDIS_ADDR`             | `127.0.0.1:6379`    | Redis address for policy seeding. `make loadtest` starts Redis here when the port is closed |
 | `BOUNCER_BASELINE_RPS`   | `1000`              | Target RPS for the baseline scenario         |
 | `BOUNCER_STRESS_RPS`     | `10000`             | Target RPS for the stress scenario           |
 | `BOUNCER_SKIP_BASELINE`  | `false`             | Set `true` to run only the stress scenario   |
@@ -121,7 +122,7 @@ The load test runs automatically in GitHub Actions via `.github/workflows/loadte
 | nightly `schedule` | baseline | Regression signal (1 000 RPS, 1 min) |
 | `workflow_dispatch`| chosen   | On-demand smoke / baseline / full     |
 
-The workflow builds the engine, starts it in the background, waits for `:50051` readiness, seeds policies, runs k6, and uploads `loadtest-results.json` + `engine.log` as artifacts. A threshold breach (E2E p99 ≥ 10 ms, engine eval p99 ≥ 2 ms, or check failures) fails the run. The manual dispatch exposes `profile`, `baseline_rps`, and `stress_rps` inputs.
+The workflow provides Redis as a service container, then `make loadtest` builds the engine, starts it in the background, waits for `:50051` readiness, seeds policies, runs k6, and uploads `loadtest-results.json` + `engine.log` as artifacts. Because that service is already listening, the Make target does not start a second Redis. A threshold breach (E2E p99 ≥ 10 ms, engine eval p99 ≥ 2 ms, or check failures) fails the run. The manual dispatch exposes `profile`, `baseline_rps`, and `stress_rps` inputs.
 
 ## Performance Benchmarks (Optimized)
 
