@@ -1,7 +1,7 @@
 # 🛡️ Bouncer Engine
 
 > 🚧 🏗️ **Status: Active Development (Pre-Alpha)** 🏗️ 🚧  
-> *Bouncer Engine is currently a work in progress. The core evaluation engine is being built, and API contracts (gRPC/REST) are subject to change. It is not yet ready for production use.*
+> *Bouncer Engine is currently a work in progress. The core evaluation engine is being built, and the gRPC API contract is subject to change. It is not yet ready for production use.*
 
 Bouncer Engine is an open-source, high-performance Attribute-Based Access Control (ABAC) authorization engine written in Go. 
 
@@ -14,19 +14,76 @@ Unlike standard Role-Based Access Control (RBAC) which relies on static group as
 * **Resource Attributes:** What is being accessed? (e.g., environment, data sensitivity, owner)
 * **Environment Attributes:** What is the context? (e.g., IP address, time of day)
 
+## Policy Definition and Ingestion
+
+Policies are JSON documents describing *who* may perform *which action* on *which resource*, optionally gated by conditions over principal, resource, and environment attributes. Each policy targets one `resource_type` + `action` pair and carries conditions that must **all** match for the policy to apply.
+
+```json
+{
+  "id": "pol-allow-admin-read",
+  "description": "Allow admins to read production dashboards",
+  "access": "ALLOW",
+  "target": { "resource_type": "dashboard", "action": "READ" },
+  "conditions": [
+    { "attribute": "principal.role", "operator": "EQUALS", "value": ["admin"] }
+  ]
+}
+```
+
+* **`id`** — unique policy identifier (also used to target a `DELETE`).
+* **`access`** — `ALLOW` or `DENY`.
+* **`target`** — the `resource_type` and `action` the policy applies to.
+* **`conditions`** — dynamic rules over `principal.*`, `resource.*`, or `environment.*` attributes. `value` is always an array of strings.
+
+### Supported operators
+
+| Operator       | Matches when …                                                                  |
+| :---           | :---                                                                             |
+| `EQUALS`       | Request values equal the condition values exactly.                               |
+| `CONTAINS_ALL` | Request values include every condition value.                                    |
+| `CONTAINS_ANY` | Request values share at least one condition value.                               |
+| `IN_CIDR`      | A single request IP falls within any of the condition's CIDR blocks.             |
+| `BETWEEN`      | A numeric request value lies within `[value[0], value[1]]` (inclusive).          |
+| `REGEX`        | Any request value matches the pre-compiled regex pattern.                        |
+
+### Evaluation semantics
+
+Evaluation is **deny-overrides**: if a `DENY` policy matches, it short-circuits before allow policies are considered; otherwise the first matching `ALLOW` policy grants access; a request matching nothing is **denied by default**. The evaluation path is lock-free and allocation-free (see [Performance Benchmarks](#performance-benchmarks-optimized)).
+
+### Pushing updates
+
+Policy updates are ingested **only** from the Redis stream `authpolicy:events` (see `REDIS_ADDR`, default `localhost:6379`). Entries carry three fields:
+
+| Field         | Description                                                      |
+| :---          | :---                                                             |
+| `action`      | `UPSERT` (insert or replace) or `DELETE`.                        |
+| `policy_id`   | The policy identifier, e.g. `pol-allow-admin-read`.              |
+| `policy_json` | The full policy JSON document (required for `UPSERT`).           |
+
+```bash
+redis-cli XADD authpolicy:events * action UPSERT policy_id pol-1 \
+  policy_json '{"id":"pol-1","description":"Allow admins","access":"ALLOW","target":{"resource_type":"dashboard","action":"READ"},"conditions":[{"attribute":"principal.role","operator":"EQUALS","value":["admin"]}]}'
+redis-cli XADD authpolicy:events * action DELETE policy_id pol-1
+```
+
+The engine subscribes to the stream and applies updates to its in-memory, lock-free policy store as they arrive; on boot it replays the stream from the start so it picks up any missed updates. `cmd/mock-publisher` demonstrates this end to end (publish a policy, then run one `CheckAccess`).
+
 ## Architecture
 
 * **Language:** Go 1.26
-* **Interface:** gRPC / Protocol Buffers
-* **Data Model:** JSON Schema-backed policy definitions
+* **Interface:** gRPC / Protocol Buffers (`authzv1.AuthorizationService/CheckAccess`)
+* **Data Model:** Versioned JSON policies published over a Redis stream (see [Policy Definition and Ingestion](#policy-definition-and-ingestion))
 * **Observability:** Prometheus metrics + auto-provisioned Grafana dashboard
 
 ### Directory Structure
-* `api/` - API contracts, JSON Schemas, and Protobuf definitions.
+* `api/` - Protobuf service definition (`authz.proto`) and Buf config; a policy example (`policy-example.json`).
 * `cmd/` - Executable entry points (`bouncer-engine` server, `mock-publisher` demo publisher).
-* `internal/` - Private application logic (Policy Engine, Datastore, Audit Pipeline, Metrics).
-* `pkg/` - Public libraries and generated client stubs.
-* `deploy/` - Docker Compose observability stack (engine + Prometheus + Grafana).
+* `internal/` - Private application logic (Policy Engine, Datastore, Audit Pipeline, Metrics, Redis subscriber).
+* `pkg/` - Public libraries and generated gRPC client stubs.
+* `examples/` - End-to-end PEP/PDP demos (httpbin reverse proxy; Envoy + Dex + JWT).
+* `loadtest/` - k6 gRPC load tests and the policy seeder (`loadtest/seed`).
+* `deploy/` - Docker Compose observability stack (engine + Redis + Prometheus + Grafana).
+* `buf.yaml` / `buf.gen.yaml` - Buf lint/breaking config and stub generation targets (`make gen`).
 * `Dockerfile` - Multi-stage build producing a distroless runtime image for the engine.
 
 ## Getting Started
@@ -42,13 +99,14 @@ make build            # produces bin/bouncer-engine
 ```
 
 ### Run the full stack via Docker
-One command builds the engine image and brings up the engine, Prometheus, and Grafana on a shared bridge network:
+One command builds the engine image and brings up the engine, **Redis** (policy update stream), Prometheus, and Grafana on a shared bridge network:
 ```bash
 docker compose -f deploy/observability/docker-compose.yml up -d --build
 ```
 
 | Service        | Address                          | Notes                                            |
 | :---           | :---                             | :---                                             |
+| Redis          | `localhost:6379`                 | Policy update stream (`authpolicy:events`)       |
 | Bouncer Engine | `localhost:50051` (gRPC)         | Raw metrics at `http://localhost:9090/metrics`   |
 | Prometheus     | `http://localhost:9091`          | Scrapes the engine every 15s                     |
 | Grafana        | `http://localhost:3000`          | `admin` / `admin`                                |
@@ -59,7 +117,7 @@ The Grafana "Bouncer Engine" dashboard and Prometheus datasource are auto-provis
 
 End-to-end demos of Bouncer Engine acting as a **Policy Decision Point (PDP)** behind a Policy Enforcement Point (PEP):
 
-* [examples/httpbin](examples/httpbin) — the "hello world": a hand-written Go reverse proxy (the PEP) in front of [httpbin](https://github.com/kong/httpbin), calling `CheckAccess` on every request. Three containers, no external dependencies.
+* [examples/httpbin](examples/httpbin) — the "hello world": a hand-written Go reverse proxy (the PEP) in front of [httpbin](https://github.com/kong/httpbin), calling `CheckAccess` on every request. Four containers (engine + Redis + PEP + httpbin), no external dependencies.
 * [examples/envoy-jwt](examples/envoy-jwt) — the production-shaped step up: **Envoy** verifies JWTs issued by **Dex** (OIDC) at the edge and enforces the engine's ABAC decisions via Envoy's external authorization filter, giving a clean authn ↔ authz split.
 
 ## Testing
@@ -135,21 +193,22 @@ Bouncer Engine is strictly engineered for high-throughput, low-latency authoriza
 
 ### 2. Benchmark Results
 *Hardware: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz (Constrained to 1 vCPU / 1 GB RAM via Docker)*
+*Results below were regenerated from the current codebase with `make bench` on the same hardware; regenerate locally any time with `make bench`.*
 
 | Component / Operator | Execution Speed (ns/op) | Memory Allocated (B/op) | Heap Allocations (allocs/op) | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Full Engine Evaluation** | **1,495.0** | **0** | **0** | 🟢 Passing |
-| **Operator: EQUALS** | 260.1 | 0 | 0 | 🟢 Passing |
-| **Operator: CONTAINS_ALL** | 219.8 | 0 | 0 | 🟢 Passing |
-| **Operator: CONTAINS_ANY** | 238.4 | 0 | 0 | 🟢 Passing |
-| **Operator: BETWEEN** | 201.0 | 0 | 0 | 🟢 Passing |
-| **Operator: IN_CIDR** | 282.8 | 0 | 0 | 🟢 Passing |
-| **Operator: REGEX** | 422.8 | 0 | 0 | 🟢 Passing |
+| **Full Engine Evaluation** | **611.4** | **0** | **0** | 🟢 Passing |
+| **Operator: EQUALS** | 135.0 | 0 | 0 | 🟢 Passing |
+| **Operator: CONTAINS_ALL** | 150.5 | 0 | 0 | 🟢 Passing |
+| **Operator: CONTAINS_ANY** | 123.7 | 0 | 0 | 🟢 Passing |
+| **Operator: BETWEEN** | 124.1 | 0 | 0 | 🟢 Passing |
+| **Operator: IN_CIDR** | 143.0 | 0 | 0 | 🟢 Passing |
+| **Operator: REGEX** | 246.7 | 0 | 0 | 🟢 Passing |
 
 ### 3. Engineering Analysis
 * **Zero-Allocation Parsing:** The evaluation engine achieves **0 allocs/op** and **0 B/op** across all operators. Stack-based string lookups (`strings.Cut`), immutable IP structures (`net/netip`), and load-time regex pre-compilation eliminate heap escapes entirely.
-* **Sub-Millisecond Latency:** A complete multi-condition policy evaluation finishes in **~0.0015 ms**, safely clearing the < 2 ms latency threshold.
-* **Throughput Headroom:** With an average execution speed of 1,495 ns/op, a single constrained CPU core can theoretically sustain over **668,000 evaluations per second**, easily exceeding the > 10,000 RPS requirement while leaving ample headroom for gRPC networking and asynchronous audit logging.
+* **Sub-Millisecond Latency:** A complete multi-condition policy evaluation finishes in **~0.0006 ms**, safely clearing the < 2 ms latency threshold.
+* **Throughput Headroom:** With an average execution speed of 611.4 ns/op, a single constrained CPU core can theoretically sustain over **1.6 million evaluations per second** (≈ 0.61 µs/op), easily exceeding the > 10,000 RPS requirement while leaving ample headroom for gRPC networking and asynchronous audit logging.
 
 ## Observability
 

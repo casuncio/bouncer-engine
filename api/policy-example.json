@@ -9,18 +9,18 @@
   "conditions": [
     {
       "attribute": "principal.roles",
-      "operator": "CONTAINS",
-      "value": "SecurityAdmin"
+      "operator": "CONTAINS_ANY",
+      "value": ["SecurityAdmin"]
     },
     {
       "attribute": "environment.ip_address",
       "operator": "IN_CIDR",
-      "value": "10.0.0.0/16"
+      "value": ["10.0.0.0/16"]
     },
     {
-      "attribute": "environment.time_of_day",
+      "attribute": "environment.hour",
       "operator": "BETWEEN",
-      "value": ["08:00", "18:00"]
+      "value": ["8", "18"]
     }
   ]
 }
